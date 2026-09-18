@@ -212,7 +212,7 @@ def on_key(ctx, key):
 Chip type : ESP32-C3 (QFN32) rev v1.1
 Features  : Wi-Fi, BT 5 (LE), Single Core, 160MHz, Embedded Flash 8MB (XMC)
 USB mode  : USB-Serial/JTAG
-MAC       : 4c:11:ae:32:35:c4
+MAC       : 4c:11:ae:xx:xx:xx
 Flash     : 8MB (Manufacturer 0x20, Device 0x4017)
 ```
 

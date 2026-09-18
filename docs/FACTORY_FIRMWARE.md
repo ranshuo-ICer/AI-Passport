@@ -1,7 +1,10 @@
 # 原厂固件实测档案（trae_card v1.0.0）
 
-> 2026-09-19 在实体设备（MAC `4c:11:ae:32:35:c4`）上直接抓取，非推测。
+> 2026-09-19 在实体设备上直接抓取，非推测。
 > **烧录 PassportOS / 小智固件会覆盖这份固件**，所以先把行为和参数记录下来。
+>
+> 注：本文件中的设备 MAC / `sn` / 公钥指纹已替换为占位符（见 `NOTICE.md`）。
+> 日志的**结构与字段含义是真实的**，但标识值不具备可追溯性。
 
 ---
 
@@ -26,12 +29,12 @@ LVGL 峰值占用 46,784 字节。
 这是固件内置的**产线自检**，一条命令跑完全部外设：
 
 ```
-+TEST:INFO,ver=1.0.0,sn=4c11ae3235c4,heap=76960,rst=11,PASS
++TEST:INFO,ver=1.0.0,sn=4c11aexxxxxx,heap=76960,rst=11,PASS
 +TEST:I2C,es8311=1,cw2017=1,PASS
 +TEST:AUDIO,ret=0,tone_mag=3422,peak=5261,PASS
 +TEST:BATT,present=1,soc=85,mv=4026,PASS
-+TEST:BLE,started=1,sn=4c11ae3235c4,PASS
-+TEST:ID,sn=1,key=1,pk=1,hw=1,pk_fp=30c488b8,PASS
++TEST:BLE,started=1,sn=4c11aexxxxxx,PASS
++TEST:ID,sn=1,key=1,pk=1,hw=1,pk_fp=xxxxxxxx,PASS
 +TEST:RESULT,PASS,fails=0
 ```
 
@@ -42,8 +45,8 @@ LVGL 峰值占用 46,784 字节。
 | I2C | ES8311(0x18) 与 CW2017(0x63) 都在线 |
 | AUDIO | 1000 Hz 回环：tone_mag=3422，静音基线 mag=1 → **音频通路完好** |
 | BATT | SOC 85%，4026 mV，电池在位 |
-| BLE | 控制器已启动（`sn=4c11ae3235c4`；日志未单独给出 BLE MAC） |
-| ID | 身份分区完整，含公钥指纹 `30c488b8` |
+| BLE | 控制器已启动（`sn=4c11aexxxxxx`；日志未单独给出 BLE MAC） |
+| ID | 身份分区完整，含公钥指纹 `xxxxxxxx` |
 
 > 这张表直接推翻了"音频/电池未验证"的不确定性 —— **硬件是好的**，
 > 之前 PassportOS 里没实现音频纯粹是软件没写，不是板子的问题。
@@ -114,7 +117,7 @@ prov: 产线指令就绪: AT+CARDID=/? / AT+TEST? / at+config=? / at+command=? /
 ### 4.2 配置读取实测（`at+config=?`）
 
 ```
-+CONFIG: sn=4c11ae3235c4,key=<已隐去>,hw=v1.0.0,provisioned=1,
++CONFIG: sn=4c11aexxxxxx,key=<已隐去>,hw=v1.0.0,provisioned=1,
          volume=95,standby_time=300,guide_count=2,guide_remaining=0,name=<已隐去>
 ```
 
