@@ -32,6 +32,7 @@ DOCS = [
     "docs/CODE_WIKI.md",
     "docs/FACTORY_FIRMWARE.md",
     "docs/KNOWN_ISSUES.md",
+    "miniapps/README.md",
 ]
 
 OK, BAD = [], []
@@ -244,11 +245,53 @@ def check_known_issues():
     ok("已知问题：KNOWN_ISSUES.md 存在且被主文档引用")
 
 
+# ---------------------------------------------------------------- 9. 小程序
+def check_miniapps():
+    """Enforce the two hard rules for anything in miniapps/.
+
+    Both are device constraints, not style preferences:
+      * ASCII only - the firmware's 8x8 font has no other glyphs, and a
+        truncated upload of a multi-byte file becomes a UnicodeError instead
+        of a plain SyntaxError (see KNOWN_ISSUES #1).
+      * a TITLE constant - that is what shows in the device menu.
+    Underscore-prefixed files are tooling, not mini-programs, so they are
+    exempt (and they are allowed to contain Chinese help text).
+    """
+    d = os.path.join(ROOT, "miniapps")
+    if not os.path.isdir(d):
+        bad("缺少 miniapps/ 目录")
+        return
+    apps = sorted(f for f in os.listdir(d)
+                  if f.endswith(".py") and not f.startswith("_"))
+    if not apps:
+        bad("miniapps/ 里一个小程序都没有")
+        return
+
+    seen = set()
+    for f in apps:
+        raw = open(os.path.join(d, f), "rb").read()
+        n = sum(1 for b in raw if b > 127)
+        if n:
+            bad("miniapps/%s 含 %d 个非 ASCII 字节（固件字体只有 ASCII）" % (f, n))
+        text = raw.decode("utf-8")
+        if "\nTITLE = " not in "\n" + text:
+            bad("miniapps/%s 缺少 TITLE 常量（设备菜单靠它显示名字）" % f)
+        else:
+            seen.add(text.split("TITLE = ", 1)[1].split("\n", 1)[0].strip('"\''))
+
+    readme = read("miniapps/README.md")
+    missing = sorted(t for t in seen if t not in readme)
+    if missing:
+        bad("miniapps/README.md 未收录: %s" % ", ".join(missing))
+    else:
+        ok("小程序：%d 个全部为 ASCII、有 TITLE、且已列入 README" % len(apps))
+
+
 def main():
     print("文档一致性自检 —— 仓库根目录 %s\n" % ROOT)
     for fn in (check_links, check_counts, check_config_facts,
                check_protocol_commands, check_ctx_api, check_stale_claims,
-               check_firmware_hashes, check_known_issues):
+               check_firmware_hashes, check_known_issues, check_miniapps):
         try:
             fn()
         except Exception as exc:                              # noqa: BLE001

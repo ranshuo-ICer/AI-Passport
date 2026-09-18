@@ -146,6 +146,12 @@ AI-Passport/
 │   ├── sw.js                      ← Service Worker（离线缓存）
 │   ├── manifest.webmanifest       ← PWA 清单
 │   └── make_icons.py              ← 图标生成脚本（纯标准库）
+├── miniapps/                      ← 小程序合集 + 打包/校验工具
+│   ├── README.md                  ← 玩法、安装方式、写新程序的硬约束
+│   ├── timer / reaction / snake   ← 6 个可直接推送的小程序
+│   ├── metronome / memory / repeater
+│   ├── _verify.py                 ← 离线校验器（边界/堆模型/异常/非 ASCII）
+│   └── _bundle.py                 ← 把多个小程序打成一个安装包
 ├── tools/                         ← 开发/诊断工具（15 个，见 §7）
 │   ├── deploy.py                  ← 经 mpremote 部署 PassportOS
 │   ├── serve.py                   ← 本地托管 PWA（http://127.0.0.1:8790）

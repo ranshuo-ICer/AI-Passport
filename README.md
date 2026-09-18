@@ -32,9 +32,15 @@ AI-Passport/
 │   ├── passport/                 ← 显示/按键/电池/音频/BLE/外壳
 │   └── builtin/                  ← 5 个示例小程序
 ├── pwa/                          ← 路线 B：手机端 App（Web Bluetooth）
+├── miniapps/                     ← 小程序合集 + 打包/校验工具（见下）
 ├── tools/                        ← 部署/托管/测试/诊断脚本（15 个）
 └── upstream/                     ← 官方开发仓库源码（ESP-IDF + LVGL）
 ```
+
+> [`miniapps/`](miniapps/README.md) 里是 6 个可以直接推上去玩的小程序
+> （秒表 / 反应测试 / 贪吃蛇 / 节拍器 / 记忆游戏 / 复读机），外加两个工具：
+> `_verify.py`（**推之前先离线校验**，不用硬件）和 `_bundle.py`
+> （把多个小程序打成一个安装包，解决手机 App 一次只能选一个文件的问题）。
 
 ---
 
