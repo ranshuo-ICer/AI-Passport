@@ -29,6 +29,30 @@
 推送的 ack 等待顶掉 → 走 catch → 发 `abort` → 设备删除半截应用
 （`blepush.py:440-454`）。这些按钮在上传期间并未禁用。
 
+**复现（无需硬件）**：
+
+```sh
+python tools/repro_ping_corruption.py     # 修复前：exit 1（红）
+                                          # 修复后：exit 0（绿）
+```
+
+该脚本用**生产代码本身**（`passport.blepush.AppLink`）走真实的 `_irq()` → `poll()`
+路径，只把 `bluetooth` / `machine` 换成桩。当前的输出是：
+
+```
+设备回复序列: ['put', 'ack', 'ack', 'done']      ← 设备认为自己成功了
+落盘大小: 432 字节 (声明 432)                     ← 连长度校验也发现不了
+心跳被写进了源码，位置第 216 字节
+  上下文: b'adding padding\nx ={"t":"ping"} 1  # padding padd'
+语法检查: SyntaxError: invalid syntax (第 8 行)
+```
+
+心跳被插进了**一行代码的中间**，末尾 12 字节真实源码被丢弃，而设备照常回 `done`。
+
+> 该脚本只检验**设备端**是否免疫。App 侧同样要修（上传期间 `stopHeartbeat()`），
+> 两者是互补的双层防御 —— 只修 App 的话这个脚本仍会红，这是刻意的：
+> 设备端不该依赖客户端守规矩。
+
 **建议修法**：`pushApp` 期间 `stopHeartbeat()` 并把其余命令按钮全部 `disabled`，
 `finally` 里恢复；设备端把 `ping` 补进 `_CTRL_DURING_UPLOAD`。
 

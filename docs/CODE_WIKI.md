@@ -146,7 +146,7 @@ AI-Passport/
 │   ├── sw.js                      ← Service Worker（离线缓存）
 │   ├── manifest.webmanifest       ← PWA 清单
 │   └── make_icons.py              ← 图标生成脚本（纯标准库）
-├── tools/                         ← 开发/诊断工具（14 个，见 §7）
+├── tools/                         ← 开发/诊断工具（15 个，见 §7）
 │   ├── deploy.py                  ← 经 mpremote 部署 PassportOS
 │   ├── serve.py                   ← 本地托管 PWA（http://127.0.0.1:8790）
 │   ├── esp.py                     ← esptool 包装（自动适配 v4/v5 命令名）
@@ -565,6 +565,7 @@ RSP 通知按首字节区分：
 | `ble_disconnect_test.py` | 电脑 | 复现"主机抓着 BLE 链路不放"的问题 |
 | `hw_selftest.py` | **设备** | 上板自检：屏幕/按键/电池/音频/内存/文件系统 |
 | `test_protocol.py` | 电脑 | BLE 协议状态机单测（桩模块，无需硬件） |
+| `repro_ping_corruption.py` | 电脑 | **复现 KNOWN_ISSUES #1**：上传期间心跳污染 `app.py`。exit 1 = 缺陷仍在 |
 | `test_audio.py` | 电脑 | ES8311 寄存器序列 / 分频 / 音量 / I2S 参数单测 |
 | `lint_micropython.py` | 电脑 | 静态拦截"CPython 有、MicroPython 没有"的 API |
 | `check_pwa.py` | 电脑 | 前端 JS 语法 + DOM id 一致性检查 |
@@ -662,6 +663,7 @@ python tools/test_audio.py         # 90 项：ES8311 寄存器/分频/音量/I2S
 python tools/lint_micropython.py   # 扫 os/ 下 15 个设备端文件
 python tools/check_pwa.py          # 前端 JS 语法 + DOM id 一致性
 python tools/check_docs.py         # 文档↔代码一致性（改完文档/代码都该跑）
+python tools/repro_ping_corruption.py   # 复现 KNOWN_ISSUES #1（修复前红、修复后绿）
 python tools/hw_selftest.py        # 【在设备上跑】屏幕/按键/电池/音频/内存自检
 python tools/serial_probe.py       # 读串口日志（原厂或 PassportOS）
 ```

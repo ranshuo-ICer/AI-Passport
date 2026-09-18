@@ -32,7 +32,7 @@ AI-Passport/
 │   ├── passport/                 ← 显示/按键/电池/音频/BLE/外壳
 │   └── builtin/                  ← 4 个示例小程序
 ├── pwa/                          ← 路线 B：手机端 App（Web Bluetooth）
-├── tools/                        ← 部署/托管/测试/诊断脚本（14 个）
+├── tools/                        ← 部署/托管/测试/诊断脚本（15 个）
 └── upstream/                     ← 官方开发仓库源码（ESP-IDF + LVGL）
 ```
 
