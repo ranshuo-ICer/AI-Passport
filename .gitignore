@@ -1,0 +1,27 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# --- 设备端上传产物（由 deploy.py 生成，不入库）---
+# os/ 下不应出现 .mpy 之类编译产物
+*.mpy
+
+# --- 原厂固件备份（含设备身份数据，只应留在本地）---
+backup/
+*.bin.bak
+
+# --- 编辑器 / 系统 ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# --- esptool / mpremote 临时产物 ---
+*.elf
+*.map
+build/
