@@ -30,7 +30,7 @@ AI-Passport/
 ├── os/                           ← 路线 B：PassportOS 设备端源码
 │   ├── boot.py  main.py
 │   ├── passport/                 ← 显示/按键/电池/音频/BLE/外壳
-│   └── builtin/                  ← 4 个示例小程序
+│   └── builtin/                  ← 5 个示例小程序
 ├── pwa/                          ← 路线 B：手机端 App（Web Bluetooth）
 ├── tools/                        ← 部署/托管/测试/诊断脚本（15 个）
 └── upstream/                     ← 官方开发仓库源码（ESP-IDF + LVGL）
@@ -71,7 +71,7 @@ AI-Passport/
 1. 装 `esptool` / `pyserial`
 2. 擦除 Flash，写入 MicroPython v1.29.0
 3. 把 `os/` 下的系统文件上传到设备（`tools/deploy.py`）
-4. 装上 4 个示例小程序，复位开机
+4. 装上 5 个示例小程序，复位开机
 
 看到设备屏幕出现 **Passport** 主菜单就成了。
 

@@ -137,8 +137,8 @@ AI-Passport/
 │   │   ├── apps.py                ← 小程序存储/加载/列表
 │   │   ├── blepush.py             ← BLE GATT 推送服务
 │   │   └── ui.py                  ← 系统外壳 Shell + 运行时 Ctx
-│   └── builtin/                   ← 4 个示例小程序
-│       ├── clock/  dice/  sound/  sysinfo/
+│   └── builtin/                   ← 5 个示例小程序
+│       ├── clock/  dice/  sound/  sysinfo/  muyu/
 ├── pwa/                           ← 路线 B：手机端 PWA
 │   ├── index.html                 ← 三标签页 UI
 │   ├── app.js                     ← 主逻辑（BLE/推送/模板/持久化）
@@ -433,6 +433,7 @@ def teardown(ctx): ...   # 退出前调用一次
 | Clock | [os/builtin/clock/app.py](../os/builtin/clock/app.py) | 数字时钟 | RTC 未对时退化为开机计时；`time.localtime()` |
 | Dice | [os/builtin/dice/app.py](../os/builtin/dice/app.py) | 骰子 | 按键交互 + 图形绘制（点位图 LAYOUT） |
 | Sound | [os/builtin/sound/app.py](../os/builtin/sound/app.py) | 发声玩具 | `ctx.audio` 判空、`tone()` 与 `melody()`、五声音阶 |
+| Mu Yu | [os/builtin/muyu/app.py](../os/builtin/muyu/app.py) | 木鱼计数器 | 渐变圆绘制、局部重画做敲击反馈、`kv_*` 节流落盘、跨天归零 |
 | System | [os/builtin/sysinfo/app.py](../os/builtin/sysinfo/app.py) | 系统信息 | 读 `gc.mem_free()` / 电量 / 运行时长 / BLE 状态 |
 
 每个小程序目录含 `app.py` 和 `meta.json`（`{"title": "..."}`）。
@@ -483,13 +484,13 @@ manifest.webmanifest → PWA 清单（standalone 模式）
 
 **推送分片策略**：起始 160 字节，写失败减半重试，最小 20 字节。每片等 `ack`。
 
-**模板**：`TEMPLATES` 对象内置 6 个模板（最小示例/按键计数器/滚动色带/时钟/骰子/设备信息），一键填入编辑器。
+**模板**：`TEMPLATES` 对象内置 7 个模板（最小示例/按键计数器/滚动色带/时钟/骰子/设备信息/木鱼），一键填入编辑器。
 
 **持久化**：`localStorage` 键 `passport_editor_v1` 保存编辑器内容。
 
 ### 5.3 `sw.js` Service Worker
 
-- 缓存名 `passport-pwa-v5`（**改动 pwa/ 下任何资源后必须递增这个版本号**，否则浏览器会一直用旧缓存）
+- 缓存名 `passport-pwa-v6`（**改动 pwa/ 下任何资源后必须递增这个版本号**，否则浏览器会一直用旧缓存）
 - 缓存资源：index.html / style.css / app.js / manifest / icons
 - 策略：缓存优先，后台更新；断网时返回缓存
 
