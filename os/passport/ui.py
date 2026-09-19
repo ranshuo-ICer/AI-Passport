@@ -149,6 +149,11 @@ class Shell:
 
         ctx = Ctx(self, name)
         self._app = {"name": name, "mod": mod, "ctx": ctx}
+        # 音频是外壳的共享单例（Ctx.audio = shell.audio），小程序只是借用。
+        # 上一个程序在 teardown 里留下的静音位/0 音量必须在这里清掉，否则会一直
+        # 传染给后面每个程序 —— 真机实测退出 Beats 后 REG31=0x60，全系统哑到重启。
+        if self.audio and self.audio.ok:
+            self.audio.reset_state()
         self.lcd.fill(disp.BLACK)
         self._call("setup", ctx)
         self.link.log_line("已启动 %s" % name)

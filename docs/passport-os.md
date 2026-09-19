@@ -162,6 +162,12 @@ def on_key(ctx, key): ...  # key ∈ "up"/"down"/"ok"
 def teardown(ctx): ...   # 退出前调用一次
 ```
 
+⚠ **`teardown()` 里不要复位/静音/deinit 任何 `ctx.*` 共享外设**（`ctx.audio`、
+`ctx.lcd` 都来自外壳）。停手就够了，外壳会在下一次 `launch()` 前把状态清回
+基线。芯片里的状态位（如 ES8311 的 `REG31` 静音位）**会 latch 住**，退出时
+动一下会把后面所有小程序一起弄坏 —— 真机上就这么哑过一次，见
+[pitfalls 5.5](pitfalls.md) 与 [KNOWN_ISSUES #24](known-issues.md)。
+
 ### 2.6 `blepush.py` —— BLE 小程序推送服务
 
 文件：[os/passport/blepush.py](../os/passport/blepush.py)
@@ -212,10 +218,13 @@ def teardown(ctx): ...   # 退出前调用一次
 | --- | --- |
 | `Audio(rate=16000, use_mclk=False)` | 构造即初始化；失败不抛异常，看 `.ok` / `.error` |
 | `ok` / `error` / `volume` / `rate` | 状态属性 |
+| `DEFAULT_VOLUME` | `reset_state()` 回到的音量（80） |
 | `tone(freq, ms=200)` | 纯音（1024 点正弦表 + 淡入淡出防爆音），`freq=0` 为休止 |
 | `melody(notes, bpm=120)` | 依 `NOTES` 音名表逐音播放 |
-| `set_volume(pct)` | 0~100；0 = 静音，1~100 → −40 dB ~ 0 dB（REG32 线性 dB 映射） |
-| `mute(on)` / `suspend()` | 静音 / 低功耗前关 DAC+ADC |
+| `set_volume(pct)` | 0~100；0 = 静音，1~100 → −40 dB ~ 0 dB（REG32 线性 dB 映射）。**`pct>0` 会顺带解除 DAC 静音** |
+| `mute(on)` | 写 `REG31` 静音位。⚠ 这个位**会 latch**，谁开谁负责关 |
+| `reset_state()` | 取消静音 + 回 `DEFAULT_VOLUME`；`ui.launch()` 每次启动小程序前调用 |
+| `suspend()` | 低功耗前关 DAC+ADC。⚠ **单向**：没有对应的 resume，只能重建 `Audio()` |
 | `play_raw(data)` | 直接写 16bit 单声道 PCM 字节串 |
 | `deinit()` | 释放 I2S |
 

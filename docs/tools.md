@@ -22,6 +22,9 @@
 | `hw_selftest.py` | **设备** | 上板自检：屏幕/按键/电池/音频/内存/文件系统 |
 | `hw_bench.py` | **设备** | **热点剖析**：逐项量显示/音频/JSON 的耗时，并验 viper 与纯 Python 逐位一致 |
 | `hw_btncheck.py` | **设备** | **按键 ADC 稳定性**：快速采样，确认没有幽灵按键 |
+| `hw_audio_mute_repro.py` | **设备** | **复现 KNOWN_ISSUES #24**：退出 Beats 后共享 codec 停在静音。读 `REG31` 取证 |
+| `hw_audio_reopen_probe.py` | **设备** | 探 `Audio()` 反复重建是否泄漏/失败（KNOWN_ISSUES #25） |
+| `e2e_audio_mute.ps1` | 电脑 | **端到端验 #24**：真实 OS + BLE 推送/退出，再读 `REG31`。三阶段 A/B |
 | `test_protocol.py` | 电脑 | BLE 协议状态机单测（桩模块，无需硬件） |
 | `repro_ping_corruption.py` | 电脑 | **复现 KNOWN_ISSUES #1**：上传期间心跳污染 `app.py`。exit 1 = 缺陷仍在 |
 | `test_audio.py` | 电脑 | ES8311 寄存器序列 / 分频 / 音量 / I2S 参数单测 |

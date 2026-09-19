@@ -141,6 +141,8 @@ NOTES = {
 class Audio:
     """ES8311 播放。初始化失败不会抛异常打断系统，检查 .ok 即可。"""
 
+    DEFAULT_VOLUME = 80          # 0~100，reset_state() 回到这里
+
     def __init__(self, rate=16000, i2c=None, use_mclk=False):
         # use_mclk=False（默认）：
         #   ES8311 从 BCLK 倍频出内部 DIG_MCLK。
@@ -152,7 +154,7 @@ class Audio:
         self.rate = rate if rate in COEFF else 16000
         self.ok = False
         self.error = None
-        self.volume = 80          # 0~100
+        self.volume = self.DEFAULT_VOLUME
         self._i2s = None
         self._i2c = i2c
         self._owns_i2c = i2c is None
@@ -300,6 +302,10 @@ class Audio:
 
         0 直接写静音（-95.5dB），而不是 -40dB —— 用户把音量拧到底就是要没声音。
         1~100 映射到 -40dB ~ 0dB：再往上推容易削顶失真，板载小喇叭也不划算。
+
+        pct>0 时顺带解除 DAC 静音：REG31 的静音位是**会 latch 住的**，而所有
+        小程序共用同一个 codec 实例。把"设了音量却没声音"变成不可能，比指望
+        每个程序自己记得收尾可靠。
         """
         if pct < 0:
             pct = 0
@@ -309,6 +315,7 @@ class Audio:
         if pct == 0:
             self._wr(REG32_DAC_VOL, VOL_REG_MIN)
             return
+        self._set_mute(False)
         db = -40.0 + 40.0 * pct / 100.0
         reg = int(round(VOL_REG_MIN + (db + 95.5) / 127.5 *
                         (VOL_REG_MAX - VOL_REG_MIN)))
@@ -321,8 +328,26 @@ class Audio:
     def mute(self, on=True):
         self._set_mute(on)
 
+    def reset_state(self):
+        """把 codec 恢复成"一定能发声"的基线：取消静音 + 回到默认音量。
+
+        `Ctx.audio` 就是 `shell.audio` 这一个实例（见 ui.py），所有小程序共用
+        同一颗 ES8311。任何程序在 teardown 里留下的静音位或 0 音量都会**传染**
+        给后面所有程序 —— 真机实测：退出 Beats 后 REG31 停在 0x60，此后全系统
+        没声音，只有重启能救。所以外壳在每次启动小程序前调这个把它清回基线。
+        """
+        if not self.ok:
+            return
+        self._set_mute(False)
+        self.set_volume(self.DEFAULT_VOLUME)
+
     def suspend(self):
-        """进低功耗前调用：DAC 静音 + 关 DAC/ADC。"""
+        """进低功耗前调用：DAC 静音 + 关 DAC/ADC。
+
+        ⚠ 这是**单向**的：codec 被关掉后没有对应的 resume()，只能整个
+        `Audio()` 重建才能再出声。目前全仓库没有调用者（低功耗还没做），
+        真要接低功耗休眠时必须同时补一个 resume，否则唤醒后就是哑的。
+        """
         for reg, val in ((REG32_DAC_VOL, 0x00), (REG17, 0x00), (REG0E, 0xFF),
                          (REG12, 0x02), (REG14, 0x00), (REG0D, 0xFA),
                          (REG15, 0x00), (REG02_CLK, 0x10),

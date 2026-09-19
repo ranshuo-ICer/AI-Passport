@@ -42,6 +42,16 @@ _NAME_OK = set("abcdefghijklmnopqrstuvwxyz0123456789_-")
 _NAME_RE = __import__("re").compile(r"^[a-z0-9_-]{1,16}$")
 
 
+def _safe_name(s):
+    """把用户输入归一化成合法应用名。
+
+    注意不能用 str.isalnum()：它对中文也为真，`push 时钟.py` 会得到非法名。
+    push / run / rm 统一走这里，避免三个子命令各写一份规则。
+    """
+    s = "".join(ch for ch in (s or "").lower() if ch in _NAME_OK)
+    return s[:16] or "app"
+
+
 # --------------------------------------------------------------------- 连接
 async def find_device(timeout=12.0):
     print("扫描 %s …" % DEVICE_NAME)
@@ -303,11 +313,29 @@ async def run(args):
             ok = await cmd_push(cli, args.path, args.name, args.title, args.run)
             return 0 if ok else 1
         elif args.action == "run":
-            await cli.send({"t": "run", "n": args.name})
-            print(await cli.wait(["run", "err"]))
+            # 位置参数和 --name 都接受：docstring 里写的是 `run clock`，
+            # 但原来只读 args.name，于是 `run clock` 实际发出去的是空名字，
+            # 设备端 launch("") 直接返回 False —— 静默的"假成功"，比报错难查。
+            name = _safe_name(args.name or args.path)
+            if not _NAME_RE.match(name):
+                print("应用名 %r 不合法（只允许 a-z0-9_-，≤16 字符）" % name)
+                return 1
+            await cli.send({"t": "run", "n": name})
+            reply = await cli.wait(["run", "err"])
+            print(reply)
+            # ok 是设备端 launch() 的权威返回值：名字不合法、载入失败都会是 False。
+            if not isinstance(reply, dict) or not reply.get("ok"):
+                return 1
         elif args.action == "rm":
-            await cli.send({"t": "rm", "n": args.name})
-            print(await cli.wait(["rm", "err"]))
+            name = _safe_name(args.name or args.path)
+            if not _NAME_RE.match(name):
+                print("应用名 %r 不合法（只允许 a-z0-9_-，≤16 字符）" % name)
+                return 1
+            await cli.send({"t": "rm", "n": name})
+            reply = await cli.wait(["rm", "err"])
+            print(reply)
+            if not isinstance(reply, dict) or not reply.get("ok"):
+                return 1
         elif args.action == "stop":
             await cli.send({"t": "stop"})
             print(await cli.wait(["stop", "err"]))
@@ -368,14 +396,10 @@ def main():
             print("push 需要指定一个存在的文件")
             return 1
         # 应用名规则和设备端 apps.valid_name() 一致：只允许 a-z0-9_-，≤16 字符。
-        # 注意不能用 str.isalnum()：它对中文也为真，`push 时钟.py` 会得到非法名。
-        def _safe(s):
-            s = "".join(ch for ch in s.lower() if ch in _NAME_OK)
-            return s[:16] or "app"
         if not args.name:
-            args.name = _safe(os.path.splitext(os.path.basename(args.path))[0])
+            args.name = _safe_name(os.path.splitext(os.path.basename(args.path))[0])
         else:
-            args.name = _safe(args.name)
+            args.name = _safe_name(args.name)
         if not _NAME_RE.match(args.name):
             print("应用名 %r 不合法（只允许 a-z0-9_-，≤16 字符）" % args.name)
             return 1

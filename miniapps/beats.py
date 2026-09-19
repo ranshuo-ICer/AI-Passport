@@ -454,5 +454,9 @@ def teardown(ctx):
         ctx.kv_set("pat", "".join("1" if b else "0" for b in ctx.pat))
         ctx.kv_set("bpm", ctx.bpm)
         ctx.kv_flush()
-    if ctx.audio and ctx.audio.ok:
-        ctx.audio.mute(True)
+    # Deliberately NOT calling ctx.audio.mute(True) here.
+    # ctx.audio is the shell's shared Audio instance, and the ES8311 DAC mute
+    # bit (REG31) latches: muting on exit silences every app that runs after
+    # this one, until reboot (measured on hardware: REG31 stuck at 0x60).
+    # Once loop() stops writing I2S the output is silence anyway, so there is
+    # nothing to gain by touching the shared codec.

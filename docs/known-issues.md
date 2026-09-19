@@ -184,6 +184,79 @@ class machine.I2S(id, *, sck, ws, sd, mck=None, mode, bits, format, rate, ibuf)
 功能上 BCLK 倍频能用、真机也出声了，但走外部 MCLK 是更正规的方案
 （时钟更准、少一层倍频抖动）。**建议在真机上重新试一次 `mck=Pin(6)`。**
 
+### #24 退出 Beats 后共享 codec 停在静音，全系统没声音 — `FIXED`
+
+用户报「偶尔会出现不发出声音，好像退出 beats 后就会这样」。
+
+`Ctx.audio` 就是 `shell.audio` 这一个实例（`os/passport/ui.py:37`），所有小程序
+共用同一颗 ES8311。而 `miniapps/beats.py` 的 `teardown()` 里调了
+`ctx.audio.mute(True)` —— 它写的是 `REG31` 的 DAC 静音位，**这个位会一直 latch
+住**，而全仓库**没有任何地方**调 `mute(False)`（只有 `Audio.__init__` 会）。
+
+于是「长按 OK 退出 Beats」= 把整台设备的 DAC 永久静音，之后每个小程序都哑，
+只有重启能救。`set_volume()` 只写 `REG32`、不碰 `REG31`，所以**重新进 Beats
+也救不回来**。
+
+真机取证（`tools/hw_audio_mute_repro.py`，读 ES8311 `REG31`）：
+
+| 步骤 | REG31 |
+| --- | --- |
+| 新建 `Audio()`（= 开机） | `0x00` 有声 |
+| 调真实 `beats.teardown()` | `0x60` **静音** |
+| 随后 `set_volume(70)` + `tone(880, 150)` | `0x60` **仍然静音** |
+
+之前没被发现，是因为它是"下一个程序才发作"的延迟故障：Beats 自己听着完全正常。
+
+**修复**（三层，任何一层单独都能挡住）：
+
+1. `miniapps/beats.py`：`teardown()` 不再碰共享 codec。退出后 `loop()` 停止写
+   I2S，输出本来就是静音，没有理由去关 DAC。
+2. `os/passport/audio.py` `set_volume(pct)`：`pct>0` 时顺带解除静音，让"设了
+   音量却没声音"变成不可能。
+3. `os/passport/audio.py` 新增 `reset_state()`（取消静音 + 回默认音量），
+   由 `os/passport/ui.py` 的 `launch()` 在**每次启动小程序前**调用 —— 外壳是
+   共享外设的owner，必须保证下一个程序拿到的是干净状态，而不是指望每个程序
+   自己记得收尾。
+
+同一族问题还有一处未验证的隐患，见 #25。
+
+### #25 `repeater` 用「重建实例」修复共享音频，失败即全系统哑 — `待定`
+
+`miniapps/repeater.py`（录音）必须独占 I2S(0)，所以每次录音都要先
+`_release()` 把共享的 `Audio` **deinit 掉**（`.ok` 从此为 `False`），再在
+`teardown()` 里 `Audio()` 造一个**新实例**塞回 `ctx.shell.audio`：
+
+```python
+if ctx.moved:
+    fresh = Audio()
+    if fresh.ok:
+        ctx.shell.audio = fresh
+```
+
+一旦这次 `Audio()` 构造失败（这块板无 PSRAM、堆常年碎片化，`apps.py` 的
+docstring 就记着"还有 78 KB 空闲却分配不出 19 KB"），`fresh.ok` 为假 →
+`shell.audio` **仍是那个已死的旧实例** → 全系统没声音，同样只有重启能救。
+`except` 分支还静默吞掉了异常。
+
+本次修复的 `reset_state()` 对死实例会直接 `return`（`if not self.ok`），
+所以**挡不住这条路径**。
+
+**已尝试复现，未成功**（`tools/hw_audio_reopen_probe.py`）：在真机上做
+`Audio()` → `deinit()` → `Audio()` 循环 20 次，全部重建成功，且每次
+create/deinit 在 GC 堆上**净增减为 0 字节**，没有观察到泄漏。
+
+但这个"未复现"证据很弱，不能据此认为 #25 不存在：
+
+- `gc.mem_free()` **看不到 I2S 的 DMA 缓冲**（每次重建 GC 堆净 0 就说明了这点），
+  而真正会先耗尽的恰恰是 DMA 能用的那块内部 RAM。堆看着很空、`I2S()` 却
+  返回 `ESP_ERR_NO_MEM`，是这个探测**测不到**的情形。
+- 探测没有复现 repeater 的真实情形：它在**持有大块录音缓冲的同时**把共享
+  Audio deinit 掉，碎片正是那些缓冲造成的。
+
+**待办**：在真机上把 repeater 完整跑一遍（录音 → 退出），量 `shell.audio.ok`
+是否变 `False`；若会，再把 `Audio` 改成可原地重开（拆出 `reopen()`，复用同一个
+实例重建 I2S + 重跑 codec 配置），让 repeater 不再需要替换外壳的实例。
+
 ---
 
 ## P2 — 其它（工具/测试/卫生）

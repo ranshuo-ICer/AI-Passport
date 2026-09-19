@@ -235,6 +235,54 @@ def main():
     check("0x02 pre_multi=×1 (datmp=0)", (f3.regs[0x02] & 0x18) == 0x00,
           "0x02=0x%02X" % f3.regs[0x02])
 
+    print("\n[10] 共享 codec 的静音门闩（KNOWN_ISSUES #24）")
+    # Ctx.audio 就是 shell.audio 这一个实例，所有小程序共用同一颗 ES8311。
+    # REG31(0x31) 的 DAC 静音位会一直 latch 住，而全系统只有 Audio.__init__
+    # 会写 mute=False —— 真机实测：退出 Beats 后 REG31=0x60，此后全系统没声音。
+    # 下面把三层防线都钉住，任何一层被改掉都会在这里红。
+    f4 = FakeI2C()
+    a4 = Audio(rate=16000, i2c=f4)
+    check("初始化后不静音", not (f4.regs[0x31] & 0x60),
+          "0x31=0x%02X" % f4.regs[0x31])
+
+    a4.mute(True)
+    check("mute(True) 确实置上门闩", (f4.regs[0x31] & 0x60) == 0x60,
+          "0x31=0x%02X" % f4.regs[0x31])
+
+    # 第 2 层防线：set_volume(pct>0) 必须顺带解除静音
+    a4.set_volume(70)
+    check("set_volume(70) 解除静音", not (f4.regs[0x31] & 0x60),
+          "0x31=0x%02X" % f4.regs[0x31])
+
+    a4.set_volume(0)
+    check("set_volume(0) 走 0x32 静音（-95.5dB）", f4.regs[0x32] == 0x00,
+          "0x32=0x%02X" % f4.regs[0x32])
+
+    # 第 3 层防线：外壳在每次启动小程序前调 reset_state()
+    a4.mute(True)
+    a4.set_volume(3)
+    a4.reset_state()
+    check("reset_state() 解除静音", not (f4.regs[0x31] & 0x60),
+          "0x31=0x%02X" % f4.regs[0x31])
+    f5 = FakeI2C()
+    Audio(rate=16000, i2c=f5)          # __init__ 里就会 set_volume(DEFAULT_VOLUME)
+    check("reset_state() 音量回到 DEFAULT_VOLUME(%d)" % a4.DEFAULT_VOLUME,
+          f4.regs[0x32] == f5.regs[0x32],
+          "reset 后 0x%02X，期望 0x%02X" % (f4.regs[0x32], f5.regs[0x32]))
+    check("DEFAULT_VOLUME 是 80", a4.DEFAULT_VOLUME == 80)
+
+    # 对已 deinit 的实例 reset_state() 必须是 no-op，不能假装救回来
+    # （repeater 那条路径下实例是真的死了，见 KNOWN_ISSUES #25）
+    f6 = FakeI2C()
+    dead = Audio(rate=16000, i2c=f6)
+    dead.ok = False
+    f6.regs[0x31] = 0x60
+    f6.regs[0x32] = 0x11
+    dead.reset_state()
+    check("reset_state() 对 !ok 实例不动寄存器",
+          f6.regs[0x31] == 0x60 and f6.regs[0x32] == 0x11,
+          "0x31=0x%02X 0x32=0x%02X" % (f6.regs[0x31], f6.regs[0x32]))
+
     print("\n" + "=" * 56)
     print("通过 %d 项，失败 %d 项" % (len(PASS), len(FAIL)))
     if FAIL:

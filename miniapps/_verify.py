@@ -177,9 +177,15 @@ def make_stubs(heap_total, heap_frag, clock):
             self.error = None
             self.rate = rate
             self.played = []
+            # 模拟 ES8311 REG31 的 DAC 静音位：它会一直 latch 住，而所有小程序
+            # 共用这一个实例 —— 退出时留下静音会把后面每个程序一起弄哑。
+            # 见 docs/known-issues.md #24（真机实测退出 Beats 后 REG31=0x60）。
+            self.muted = False
 
         def set_volume(self, v):
-            pass
+            # 真机上 pct>0 会顺带解除静音（audio.py 第 2 层防线）
+            if v > 0:
+                self.muted = False
 
         def tone(self, f, ms=200):
             self.played.append(("tone", f, ms))
@@ -191,7 +197,7 @@ def make_stubs(heap_total, heap_frag, clock):
             self.played.append(("raw", len(d)))
 
         def mute(self, on=True):
-            pass
+            self.muted = bool(on)
 
         def deinit(self):
             self.ok = False
@@ -371,6 +377,12 @@ def main():
         ok = False
         print("  [FAIL] 源码含 %d 个非 ASCII 字节（设备字体只有 ASCII，"
               "且被截断时会变成 UnicodeError）" % non_ascii)
+    if getattr(ctx.audio, "muted", False):
+        ok = False
+        print("  [FAIL] teardown 之后共享 codec 仍是静音（ctx.audio.muted=True）")
+        print("         小程序共用 shell.audio 这一个实例，而 REG31 的静音位会 latch：")
+        print("         留下的静音会传染给后面每个程序，只有重启能救。")
+        print("         别在 teardown 里 mute —— 见 docs/known-issues.md #24。")
 
     written = []
     for dirpath, _dn, fns in os.walk(fs_root):
