@@ -127,29 +127,36 @@ def _scale_row(src, dst, base, w, scale):
             b += 2
 
 
-def _to_be(buf):
-    """RGB565 小端字节序 → ST7789 需要的高位在前。
+# 常命令字节，避免热路径上每次 bytes((cmd,)) 分配
+_B_2A = b"\x2a"
+_B_2B = b"\x2b"
+_B_2C = b"\x2c"
 
-    为什么不用 array.byteswap()：
-        **MicroPython 的 array 模块没有 byteswap()**。CPython 有，
-        所以在电脑上做单元测试时这条路完全正常，只有烧到真机才炸
-        （本项目就踩过：AttributeError: 'array' object has no attribute 'byteswap'）。
-    所以这里手写一遍，优先走 viper，不可用才退回纯 Python。
+
+def _to_be_into(src, dst, n):
+    """把 src 的 n 个字节按 16bit 翻转写进 dst。viper 优先，失败退回纯 Python。"""
+    if _to_be_fast is not None:
+        try:
+            _to_be_fast(src, dst, n)
+            return
+        except Exception:                                 # noqa: BLE001
+            pass
+    j = 1
+    for i in range(0, n - 1, 2):
+        dst[i] = src[j]
+        dst[j] = src[i]
+        j += 2
+
+
+def _to_be(buf):
+    """RGB565 小端字节序 → ST7789 需要的高位在前（返回新缓冲）。
+
+    热路径（Display.blit）请走 _to_be_into()，复用常驻缓冲、不再每次分配。
     """
     mv = memoryview(buf)
     n = len(mv) & ~1                     # 只处理成对的字节
     out = bytearray(n)
-    if _to_be_fast is not None:
-        try:
-            _to_be_fast(mv, out, n)
-            return out
-        except Exception:                                 # noqa: BLE001
-            pass                         # 运行期才暴露的问题：永久退回
-    j = 1
-    for i in range(0, n - 1, 2):
-        out[i] = mv[j]
-        out[j] = mv[i]
-        j += 2
+    _to_be_into(mv, out, n)
     return out
 
 
@@ -195,6 +202,12 @@ class Display:
         self.dc = Pin(C.LCD_DC, Pin.OUT, value=1)
         # 背光先关，初始化完再点亮，避免开机花屏
         self.bl = PWM(Pin(C.LCD_BL), freq=C.LCD_BL_FREQ, duty=0)
+
+        # 常驻小缓冲，避免热路径上反复分配：
+        #   _win  —— set_window 的 4 字节参数
+        #   _swap —— blit 的字节序翻转输出（按需增长，只增不减）
+        self._win = bytearray(4)
+        self._swap = bytearray(64)
 
         self._init_panel()
         self.backlight(backlight)
@@ -247,9 +260,40 @@ class Display:
 
     # ------------------------------------------------------------------ 绘图
     def set_window(self, x0, y0, x1, y1):
-        self._cmd(0x2A, (x0 >> 8, x0 & 0xFF, x1 >> 8, x1 & 0xFF))
-        self._cmd(0x2B, (y0 >> 8, y0 & 0xFF, y1 >> 8, y1 & 0xFF))
-        self._cmd(0x2C)                     # RAMWR
+        """设定刷新窗口并进入写显存模式（0x2A / 0x2B / 0x2C）。
+
+        这段在热路径上被调用得极频繁（每画一块就走一次），所以专门优化过：
+
+        · **整个过程 CS 只拉低一次**。原来每条命令都走 _write()，各自切一遍
+          CS/DC —— 一次 set_window 要 15 回 Pin 调用。
+        · **参数用预分配的 4 字节缓冲拼**，不再每次 bytes((...)) 分配。
+
+        实测这是 blit 里除字节翻转外最大的一块开销。
+        """
+        win = self._win
+        self.cs(0)
+
+        self.dc(0)
+        self.spi.write(_B_2A)
+        win[0] = x0 >> 8
+        win[1] = x0 & 0xFF
+        win[2] = x1 >> 8
+        win[3] = x1 & 0xFF
+        self.dc(1)
+        self.spi.write(win)
+
+        self.dc(0)
+        self.spi.write(_B_2B)
+        win[0] = y0 >> 8
+        win[1] = y0 & 0xFF
+        win[2] = y1 >> 8
+        win[3] = y1 & 0xFF
+        self.dc(1)
+        self.spi.write(win)
+
+        self.dc(0)
+        self.spi.write(_B_2C)               # RAMWR
+        self.cs(1)
 
     def fill_rect(self, x, y, w, h, color):
         """纯色矩形。按扫描线分块推送，内存占用与矩形高度无关。"""
@@ -322,11 +366,25 @@ class Display:
 
         ⚠ 不要用 array.byteswap() —— **MicroPython 的 array 没有这个方法**
         （CPython 有，所以这个坑在电脑上跑测试时完全暴露不出来，只有真机才炸）。
+
+        翻转结果写进常驻的 self._swap，不再每次新建 bytearray —— 文字每帧
+        都要走这条路径，省下的就是每次 1 KB 上下的分配 + GC。
         """
         if x >= self.w or y >= self.h or w <= 0 or h <= 0:
             return
         self.set_window(x, y, x + w - 1, y + h - 1)
-        data = _to_be(buf) if swap else buf
+        if swap:
+            mv = memoryview(buf)
+            n = len(mv) & ~1
+            if n == 0:
+                return
+            if len(self._swap) < n:
+                self._swap = bytearray(n)
+            _to_be_into(mv, self._swap, n)
+            # spi.write 是阻塞的，写完才返回，所以复用缓冲是安全的
+            data = memoryview(self._swap)[:n]
+        else:
+            data = buf
         self.dc(1)
         self.cs(0)
         self.spi.write(data)

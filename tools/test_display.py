@@ -50,19 +50,51 @@ class FakePin:
 
     def __init__(self, n, *a, **kw):
         self.n = n
+        self.name = kw.pop("_name", "pin")
+        self.log = None
 
     def __call__(self, v=None):
+        if self.log is not None:
+            self.log.append((self.name, v))
         return 0
 
 
 class FakeSPI:
-    """Records the size of every buffer handed to write()."""
+    """Records every buffer handed to write(), tagged with the DC level."""
     def __init__(self, *a, **kw):
-        self.writes = []
+        self.writes = []          # sizes only (kept for the older assertions)
+        self.frames = []          # (dc_value_at_write, bytes)
+        self._dc = None
 
     def write(self, data):
-        self.writes.append(len(data))
-        return len(data)
+        b = bytes(data)
+        self.writes.append(len(b))
+        self.frames.append((self._dc, b))
+        return len(b)
+
+
+class DcTrackingPin:
+    """A DC pin that also tells the SPI stub what level is currently driven.
+
+    Without this the stub cannot tell a command byte from a parameter byte.
+    """
+    def __init__(self, log, spi):
+        self.log = log
+        self.spi = spi
+
+    def __call__(self, v=None):
+        self.log.append(("dc", v))
+        self.spi._dc = v
+        return 0
+
+
+class CsTrackingPin:
+    def __init__(self, log):
+        self.log = log
+
+    def __call__(self, v=None):
+        self.log.append(("cs", v))
+        return 0
 
 
 def install_stubs():
@@ -86,10 +118,15 @@ def main():
     d.w = C.LCD_W
     d.h = C.LCD_H
     d._fb_cache = {}
+    d._fb_bytes = 0
+    d._win = bytearray(4)                     # set_window 的常驻参数缓冲
+    d._swap = bytearray(64)                   # blit 的常驻翻转缓冲
     d.spi = FakeSPI()
-    d.cs = lambda v=None: None
-    d.dc = lambda v=None: None
-    d._cmd = lambda *a, **kw: None            # 面板命令与本次检查无关
+    gpio = []
+    d.cs = CsTrackingPin(gpio)
+    d.dc = DcTrackingPin(gpio, d.spi)
+    # 像素数据的断言只关心"推了多少像素"，窗口设置另有专测（第 6 节）
+    d.set_window = lambda *a: None
 
     print("[1] 满宽填充不再要求大块连续内存")
     d.spi.writes = []
@@ -148,11 +185,60 @@ def main():
           sum(d.spi.writes) == 40 * 40 * 2, "实际 %d" % sum(d.spi.writes))
 
     print("\n[5] 颜色字节序（ST7789 要高位在前）")
-    d.spi.writes = []
-    d.spi.write = lambda data: (d.spi.writes.append(bytes(data)), len(data))[1]
+    d.set_window = lambda *a: None
+    d.spi.frames = []
     d.fill_rect(0, 0, 2, 1, 0xF800)            # 纯红
-    check("红色先发高字节 0xF8", d.spi.writes and d.spi.writes[0][:2] == b"\xf8\x00",
-          d.spi.writes[0][:2].hex() if d.spi.writes else "无写入")
+    px = d.spi.frames[0][1] if d.spi.frames else b""
+    check("红色先发高字节 0xF8", px[:2] == b"\xf8\x00",
+          px[:2].hex() if px else "无写入")
+
+    print("\n[6] set_window 的协议序列（优化后必须仍然正确）")
+    # 把真实 set_window 装回去（前面为了数像素把它换掉了）
+    d.set_window = D.Display.set_window.__get__(d, D.Display)
+    d.spi.writes = []
+    d.spi.frames = []
+    gpio.clear()
+    d.set_window(0x12, 0x34, 0x56, 0x78)
+
+    # 期望：CS 拉低一次 -> (DC低,'2A') (DC高, x0hi x0lo x1hi x1lo)
+    #       -> (DC低,'2B') (DC高, y0hi y0lo y1hi y1lo) -> (DC低,'2C') -> CS 拉高
+    cmds = [(dc, b) for dc, b in d.spi.frames]
+    check("一共 5 次 SPI 写", len(cmds) == 5, "%d 次" % len(cmds))
+    check("X 列命令 0x2A + 4 字节参数",
+          len(cmds) > 1 and cmds[0] == (0, b"\x2a")
+          and cmds[1] == (1, b"\x00\x12\x00\x56"),
+          repr(cmds[:2]))
+    check("Y 行命令 0x2B + 4 字节参数",
+          len(cmds) > 3 and cmds[2] == (0, b"\x2b")
+          and cmds[3] == (1, b"\x00\x34\x00\x78"),
+          repr(cmds[2:4]))
+    check("RAMWR 0x2C", len(cmds) > 4 and cmds[4] == (0, b"\x2c"), repr(cmds[4:5]))
+    cs_seq = [v for name, v in gpio if name == "cs"]
+    check("整个过程 CS 只拉低一次", cs_seq == [0, 1], repr(cs_seq))
+    check("命令字节走 DC=0、参数走 DC=1",
+          [dc for dc, _ in cmds] == [0, 1, 0, 1, 0],
+          repr([dc for dc, _ in cmds]))
+
+    print("\n[7] blit 复用常驻缓冲，不再每次分配")
+    d.set_window = lambda *a: None
+    buf = bytearray(80 * 8 * 2)
+    for i in range(len(buf)):
+        buf[i] = (i * 3 + 1) & 0xFF
+    d._swap = bytearray(64)                    # 故意给个小的，逼它按需增长
+    old_id = id(d._swap)
+    d.blit(buf, 0, 0, 80, 8)
+    grown = len(d._swap)
+    check("缓冲按需增长到 >= 请求长度", grown >= len(buf), "%d" % grown)
+    d.spi.frames = []
+    d.spi._dc = None
+    d.blit(buf, 0, 0, 80, 8)
+    first = d.spi.frames[0][1]
+    check("翻转结果正确（高低字节互换）",
+          first[0] == buf[1] and first[1] == buf[0],
+          "%02x %02x vs %02x %02x" % (first[0], first[1], buf[0], buf[1]))
+    check("缓冲被复用（没有重新分配）", len(d._swap) == grown)
+    check("推给 SPI 的就是 80*8*2 字节", len(first) == 80 * 8 * 2,
+          "实际 %d" % len(first))
 
     print("\n" + "=" * 56)
     print("通过 %d 项，失败 %d 项" % (len(PASS), len(FAIL)))
