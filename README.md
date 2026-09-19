@@ -147,7 +147,7 @@ AI-Passport/
 │   └── builtin/              随系统发布的示例小程序（5 个）
 ├── pwa/                      手机端 App（Web Bluetooth）
 ├── miniapps/                 可推送的小程序合集 + 开发工具
-├── tools/                    部署 / 托管 / 测试 / 诊断脚本（16 个）
+├── tools/                    部署 / 托管 / 测试 / 诊断脚本（17 个）
 └── upstream/                 官方开发仓库 main 分支快照（硬件事实来源）
 ```
 

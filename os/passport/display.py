@@ -49,6 +49,83 @@ def rgb(r, g, b):
 # 4 KB 足够覆盖几个常见宽度，同时不会把堆切碎。
 TEXT_FB_BUDGET = 4096
 
+# ===========================================================================
+# 热点加速：viper
+#
+# 实测（真机 hw_bench.py，160MHz ESP32-C3）：
+#     _to_be 纯 Python      5.1 us/字节   → 1280 字节的文字要 6.5 ms
+#     一次 text(10 字符)   10.1 ms，其中 _to_be 占 65%
+#     fill 整屏            69 ms
+# 界面刷新慢的根子就在这里。
+#
+# 为什么用 viper 而不是 C：
+#   · viper 是"用 Python 写、编译成机器码"，量级上接近 C（音频那边实测 26x）；
+#   · **不需要重编固件** —— 官方预编译的 MicroPython 直接就能跑；
+#   · 写成 C 模块就得自己维护一份固件，代价远大于那点额外收益。
+# 编译不出机器码是可能的（DRAM 不可执行等），所以整块包在 try 里，
+# 失败就退回纯 Python，两条路结果逐位相同。
+# ===========================================================================
+try:
+    import micropython
+except ImportError:                                       # noqa: BLE001
+    micropython = None
+
+_to_be_fast = None
+_scale_row_fast = None
+
+if micropython is not None:
+    # 两个函数分开 try：一个编译不出来不该连累另一个。
+    try:
+        @micropython.viper
+        def _to_be_fast(src, dst, n: int):
+            s = ptr8(src)
+            d = ptr8(dst)
+            i = 0
+            while i < n:
+                d[i] = s[i + 1]
+                d[i + 1] = s[i]
+                i += 2
+    except Exception:                                     # noqa: BLE001
+        _to_be_fast = None
+
+    try:
+        @micropython.viper
+        def _scale_row_fast(src, dst, base: int, w: int, scale: int):
+            s = ptr8(src)
+            d = ptr8(dst)
+            i = 0
+            while i < w:
+                lo = s[base + i * 2]
+                hi = s[base + i * 2 + 1]
+                b = i * scale * 2
+                k = 0
+                while k < scale:
+                    d[b] = hi
+                    d[b + 1] = lo
+                    b += 2
+                    k += 1
+                i += 1
+    except Exception:                                     # noqa: BLE001
+        _scale_row_fast = None
+
+
+def _scale_row(src, dst, base, w, scale):
+    """把 src 里从 base 开始的一行（w 个像素）横向放大 scale 倍写进 dst（大端）。"""
+    if _scale_row_fast is not None:
+        try:
+            _scale_row_fast(src, dst, base, w, scale)
+            return
+        except Exception:                                 # noqa: BLE001
+            pass
+    for i in range(w):
+        lo = src[base + i * 2]
+        hi = src[base + i * 2 + 1]
+        b = i * scale * 2
+        for _k in range(scale):
+            dst[b] = hi
+            dst[b + 1] = lo
+            b += 2
+
 
 def _to_be(buf):
     """RGB565 小端字节序 → ST7789 需要的高位在前。
@@ -57,11 +134,17 @@ def _to_be(buf):
         **MicroPython 的 array 模块没有 byteswap()**。CPython 有，
         所以在电脑上做单元测试时这条路完全正常，只有烧到真机才炸
         （本项目就踩过：AttributeError: 'array' object has no attribute 'byteswap'）。
-    所以这里手写一遍。输入是 framebuf 或 bytearray，输出是新的 bytearray。
+    所以这里手写一遍，优先走 viper，不可用才退回纯 Python。
     """
     mv = memoryview(buf)
-    n = len(mv)
+    n = len(mv) & ~1                     # 只处理成对的字节
     out = bytearray(n)
+    if _to_be_fast is not None:
+        try:
+            _to_be_fast(mv, out, n)
+            return out
+        except Exception:                                 # noqa: BLE001
+            pass                         # 运行期才暴露的问题：永久退回
     j = 1
     for i in range(0, n - 1, 2):
         out[i] = mv[j]
@@ -196,15 +279,24 @@ class Display:
         rows = 2048 // (w * 2)
         if rows < 1:
             rows = 1
+        # 整块只分配一次，循环里复用。
+        # 原来是每次 self.spi.write(line * n) 都重新拼一个大 bytes ——
+        # 整屏填充要重复 80 次，实测把 70 ms 里的一大半花在分配和 GC 上。
+        # 实测：SPI 本身能跑 38 Mbit/s，而原来的 fill 只跑到 17 Mbit/s。
+        block = line * rows
+        block_n = len(block)
         self.dc(1)
         self.cs(0)
         done = 0
         while done < h:
-            n = rows
-            if n > h - done:
-                n = h - done
-            self.spi.write(line * n)
-            done += n
+            if done + rows <= h:
+                self.spi.write(block)
+                done += rows
+            else:
+                # 只有最后不足一块时才另拼一次
+                tail = h - done
+                self.spi.write(line * tail)
+                done += tail
         self.cs(1)
 
     def fill(self, color):
@@ -308,14 +400,7 @@ class Display:
         self.cs(0)
         for r in range(8):
             base_r = r * w * 2
-            for i in range(w):
-                lo = mv[base_r + i * 2]
-                hi = mv[base_r + i * 2 + 1]
-                b = i * scale * 2
-                for _k in range(scale):
-                    row[b] = hi
-                    row[b + 1] = lo
-                    b += 2
+            _scale_row(mv, row, base_r, w, scale)
             for _ in range(scale):
                 self.spi.write(row)
         self.cs(1)
