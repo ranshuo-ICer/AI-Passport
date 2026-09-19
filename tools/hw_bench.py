@@ -67,6 +67,53 @@ bench("  a) render into framebuf", render_only, 50)
 bench("  b) lcd.blit(fb)  (含 _to_be)", lambda: lcd.blit(fb, 8, 8, 80, 8), 50)
 bench("  c) _to_be alone", lambda: _to_be(fb), 50)
 
+print("\n[small fills — what Beats does 32x per step]")
+# Beats 每走一步要重画 8 个格子，每格 4 次 fill_rect。如果单次小矩形很贵，
+# 那它才是这个 app 真正的瓶颈，而不是文字。
+bench("  fill_rect 12x30 (a cell)", lambda: lcd.fill_rect(0, 0, 12, 30, D.RED), 100)
+bench("  fill_rect 16x16 (a lamp)", lambda: lcd.fill_rect(150, 174, 16, 16, D.RED), 100)
+bench("  fill_rect 240x1 (a rule)", lambda: lcd.fill_rect(0, 0, 240, 1, D.RED), 100)
+bench("  fill_rect 1x120 (a vline)", lambda: lcd.fill_rect(0, 0, 1, 120, D.RED), 100)
+print("  (one Beats step repaints 8 cells x 4 rects + a full info panel)")
+
+print("\n[fill_rect fixed-cost breakdown]  where do the ~1.9 ms go?")
+_blk = bytes(2) * 12 * 85
+bench("  set_window alone", lambda: lcd.set_window(0, 0, 11, 29), 200)
+bench("  set_window + 1 spi write", lambda: (lcd.set_window(0, 0, 11, 29),
+                                            lcd.dc(1), lcd.cs(0),
+                                            lcd.spi.write(_blk), lcd.cs(1)), 200)
+bench("  alloc only: (bytes(2)*12)*85", lambda: (bytes(2) * 12) * 85, 200)
+bench("  alloc only: bytes(2)*12", lambda: bytes(2) * 12, 200)
+bench("  3 pin toggles (dc/cs/cs)", lambda: (lcd.dc(1), lcd.cs(0), lcd.cs(1)), 200)
+
+print("\n[Beats: one sequencer step, old vs new redraw strategy]")
+# 旧版每步把新旧两列的 8 个格子整个重画；新版只在指示条上画/擦两个小矩形。
+# 格子内容根本没变，重画纯属浪费 —— 而单次 fill_rect 是固定 ~1.9 ms。
+GRID_X, GRID_Y, CELL_W, CELL_H, ROW_H = 22, 28, 13, 30, 34
+BAR_BG, TRK = 0x0000, 0x07E0
+
+
+def old_repaint():
+    for s in (0, 1):
+        x = GRID_X + s * CELL_W
+        lcd.fill_rect(x, GRID_Y, CELL_W - 1, CELL_H * 4, BAR_BG)
+        for i in range(4):
+            y = GRID_Y + i * ROW_H
+            lcd.fill_rect(x, y, CELL_W - 1, CELL_H, BAR_BG)
+            lcd.fill_rect(x + 1, y + 2, CELL_W - 3, CELL_H - 4, TRK)
+
+
+def new_repaint():
+    for s in (0, 1):
+        x = GRID_X + s * CELL_W
+        lcd.fill_rect(x + 1, 22, CELL_W - 2, 5, 0xFD20)
+
+
+o = bench("  old: repaint both columns", old_repaint, 20)
+n = bench("  new: two marker rects", new_repaint, 20)
+print("  -> a step drops from %.1f ms to %.2f ms (%.0fx less)"
+      % (o / 1000.0, n / 1000.0, o / n if n else 0))
+
 print("\n[byte-order swap: correctness first, then speed]")
 # viper 版本必须和纯 Python 版本逐字节一致，否则颜色会错。离线测试跑不到
 # viper（CPython 没有 micropython 模块），所以只能在真机上验。

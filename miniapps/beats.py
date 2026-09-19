@@ -235,10 +235,7 @@ def _cell(ctx, idx):
     s = idx % STEPS
     x = GRID_X + s * CELL_W
     y = GRID_Y + t * ROW_H
-    # The playhead column gets a lighter background so "where are we" reads at
-    # a glance without having to look at the marker strip.
-    bg = 0x18E3 if s == ctx.step else BG
-    l.fill_rect(x, y, CELL_W - 1, CELL_H, bg)
+    l.fill_rect(x, y, CELL_W - 1, CELL_H, BG)
     if ctx.pat[idx]:
         l.fill_rect(x + 1, y + 2, CELL_W - 3, CELL_H - 4, TRACK_COL[t])
     else:
@@ -256,10 +253,19 @@ def _cursor(ctx, idx):
     l.rect(x - 1, y - 1, CELL_W + 1, CELL_H + 2, WHT)
 
 
-def _playhead(ctx, step):
+def _playhead(ctx, step, on=True):
+    """The playhead lives ONLY in the marker strip above the grid.
+
+    An earlier version also tinted the whole playing column. That meant every
+    step repainted both the old and the new column - 8 cells x 3 fill_rect -
+    and a single fill_rect costs ~1.9 ms on this board no matter how small it
+    is, so one step burned ~45 ms of the 150 ms step budget repainting cells
+    whose content had not changed at all. Keeping the playhead in its own
+    strip makes a step cost one small rect instead.
+    """
     l = ctx.lcd
     x = GRID_X + step * CELL_W
-    l.fill_rect(x + 1, PH_Y, CELL_W - 2, PH_H, HOT)
+    l.fill_rect(x + 1, PH_Y, CELL_W - 2, PH_H, HOT if on else BG)
 
 
 def _bpm(ctx):
@@ -327,15 +333,11 @@ def _advance(ctx):
     old = ctx.step
     ctx.step = (ctx.step + 1) % STEPS
 
-    # Draw the playhead BEFORE synthesising: mixing blocks, and the eye should
-    # not have to wait for the audio to be queued.
-    x = GRID_X + old * CELL_W
-    ctx.lcd.fill_rect(x, GRID_Y, CELL_W - 1, CELL_H * TRACKS, BG)
-    for i in range(TRACKS):
-        _cell(ctx, i * STEPS + old)
-    _playhead(ctx, ctx.step)
-    for i in range(TRACKS):
-        _cell(ctx, i * STEPS + ctx.step)
+    # Two small rects: erase the old marker, draw the new one.
+    # Draw BEFORE synthesising - mixing blocks, and the eye should not have to
+    # wait for the audio to be queued.
+    _playhead(ctx, old, False)
+    _playhead(ctx, ctx.step, True)
 
     buf, active = _mix(ctx, ctx.step)
     ctx.hit = active
