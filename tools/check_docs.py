@@ -235,7 +235,40 @@ def check_known_issues():
     for doc in ("README.md", "docs/README.md", "docs/ble-protocol.md"):
         if "known-issues" not in read(doc):
             bad("%s 没有指向 docs/known-issues.md" % doc)
-    ok("已知问题：known-issues.md 存在且被主文档引用")
+
+    # 条目状态与编号。
+    #
+    # 为什么需要：这份清单漂移过一次 —— P0/P1 里一堆条目早就修好了，#12–#23
+    # 更是**整张表**都修完了却仍标着"待修"，于是后续工作（包括一次优化审计）
+    # 全被带偏。真正的教训是"状态是否属实无法静态校验"，但至少可以强制每条
+    # 都**写明**状态，让"没写状态"这种最隐蔽的漂移无法通过。
+    text = read("docs/known-issues.md")
+    ALLOWED = ("FIXED", "待定", "已定论", "不修", "设计取舍")
+    nos = []
+
+    def status_of(num, body):
+        """状态必须写成反引号里的标记，且属于允许集合。"""
+        marks = re.findall(r"`([^`]+)`", body)
+        if not any(m.startswith(a) for a in ALLOWED for m in marks):
+            bad("known-issues #%s 没写合规状态标记（应为 %s 之一；当前反引号内容 %s）"
+                % (num, "/".join(ALLOWED), marks[:3] or "无"))
+
+    # P0/P1 用 `### #N 标题 — `STATUS`` 小节形式
+    for num, title in re.findall(r"^###\s+#(\d+)\s+(.*)$", text, re.M):
+        nos.append(int(num))
+        status_of(num, title)
+    # P2 用表格行形式：| N | 位置 | 问题 | 状态 | 验证 |
+    for num, body in re.findall(r"^\|\s*(\d+)\s*\|(.*)$", text, re.M):
+        nos.append(int(num))
+        status_of(num, body)
+
+    if nos:
+        want = list(range(1, len(nos) + 1))
+        if sorted(nos) != want:
+            bad("known-issues 编号不连续/重复：实际 %s" % sorted(nos))
+        else:
+            ok("已知问题：%d 条，编号连续且每条都写了状态" % len(nos))
+    return
 
 
 # ---------------------------------------------------------------- 9. 小程序

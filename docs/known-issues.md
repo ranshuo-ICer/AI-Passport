@@ -241,40 +241,70 @@ docstring 就记着"还有 78 KB 空闲却分配不出 19 KB"），`fresh.ok` �
 本次修复的 `reset_state()` 对死实例会直接 `return`（`if not self.ok`），
 所以**挡不住这条路径**。
 
-**已尝试复现，未成功**（`tools/hw_audio_reopen_probe.py`）：在真机上做
-`Audio()` → `deinit()` → `Audio()` 循环 20 次，全部重建成功，且每次
-create/deinit 在 GC 堆上**净增减为 0 字节**，没有观察到泄漏。
+**已用真实代码路径复现机制，但没能触发失败**（`tools/hw_repeater_probe.py`）：
+直接 `load_module("repeater")` 并调用它**自己的** `_release()` / `_mk_rx()` /
+`_mk_buf()` / `_endrx()`，再照 `teardown()` 的顺序重建 `Audio()`。
 
-但这个"未复现"证据很弱，不能据此认为 #25 不存在：
+- 「共享 Audio 被 deinit」**每次都会发生**：18/18 轮 —— 机制是真的。
+- 「重建失败」**一次都没出现**：18/18 轮成功，即使额外压 0 / 20 / 40 / 48 /
+  60 / 68 KB 压舱物、把重建前的空闲堆压到 41 KB 也一样。
 
-- `gc.mem_free()` **看不到 I2S 的 DMA 缓冲**（每次重建 GC 堆净 0 就说明了这点），
-  而真正会先耗尽的恰恰是 DMA 能用的那块内部 RAM。堆看着很空、`I2S()` 却
-  返回 `ESP_ERR_NO_MEM`，是这个探测**测不到**的情形。
-- 探测没有复现 repeater 的真实情形：它在**持有大块录音缓冲的同时**把共享
-  Audio deinit 掉，碎片正是那些缓冲造成的。
+过程中修掉了探针自己的两个错误，都值得记下来（否则会得出相反的结论）：
 
-**待办**：在真机上把 repeater 完整跑一遍（录音 → 退出），量 `shell.audio.ok`
-是否变 `False`；若会，再把 `Audio` 改成可原地重开（拆出 `reopen()`，复用同一个
-实例重建 I2S + 重跑 codec 配置），让 repeater 不再需要替换外壳的实例。
+1. 第一版把 `ctx.parts = []`（释放 64 KB 录音缓冲）放在重建**之前**，于是
+   8/8 全成功。但 `repeater.teardown()` 里 `ctx.parts = []` 排在 `Audio()`
+   重建**之后**（`repeater.py:466-475`）—— 重建时那 64 KB **还活着**。顺序错了，
+   测的就不是同一条路径。
+2. 裸跑时堆有 127 KB 空闲，比真机宽松得多，必须加压舱物才接近真实水位。
+
+**结论：机制存在，但在合成压力下无法触发。** 它保持「待定」而不是关掉 ——
+压舱物是均匀的 4 KB 块，而真机的碎片来自蓝牙缓冲、显示缓存、前几次小程序切换，
+形状不同。没有证据说它安全，也没有证据说它会炸。
+
+**待办**：在真机上把 repeater 完整跑一遍（录音 → 退出 → 看 `shell.audio.ok`）；
+若确认会死，再把 `Audio` 改成可原地重开（拆出 `reopen()`，复用同一个实例重建
+I2S + 重跑 codec 配置），让 repeater 不再需要替换外壳的实例。
 
 ---
 
 ## P2 — 其它（工具/测试/卫生）
 
-| # | 位置 | 问题 |
-| --- | --- | --- |
-| 12 | `tools/deploy.py:222-229` | `--dry-run` 在探测串口之后才判断，没接设备时直接 `exit 1`，与 docstring「只打印计划」不符 |
-| 13 | `tools/deploy.py:44-60,256-261` | `--clean` 递归删除 `/passport` 和 `/apps`，**无二次确认**；若删除后传输失败，设备会失去可启动的系统。docstring 未提示该风险 |
-| 14 | `tools/check_pwa.py:16-23` | 图标缺失只打印「缺失!」，**不影响退出码**（退出码只看 DOM id）；且路径是 cwd 相对的，换目录执行即 `FileNotFoundError` |
-| 15 | `tools/esp.py:69-79` | 版本回退分支只接受首字符是数字的 token，esptool v4 的横幅 `esptool.py v4.7.0` 匹配不上 → 误判为 v5 → 全部命令名改用 v5 连字符形式，v4 下会失败 |
-| 16 | `tools/esp.py:52-59` | v5 取值映射表缺 `watchdog_reset`（v4.9+ 的 `--after/--before` 取值），会原样透传给 v5 并被拒 |
-| 17 | `tools/lint_micropython.py:66-77` | 单行 docstring（`"""…"""` 同行闭合）不会被跳过，仍参与规则匹配 → 误报。且注释声称 tools/ 因「跑在电脑上」被跳过，但 `tools/hw_selftest.py` 其实是设备端脚本，最该被扫的反而漏了 |
-| 18 | `tools/test_audio.py:163,182` | `check("…", True)` 两条硬编码断言，**永远不可能失败**，虚增了"90 项通过"的含金量 |
-| 19 | `tools/ble_client.py:349-351` | 从文件名推导应用名用 `str.isalnum()`（对中文为真），`push 时钟.py` 会得到非法名；显式 `--name Dice` 也不做 `.lower()` 归一化 |
-| 20 | `tools/ble_disconnect_test.py:81-100` | 该测试写在 25 秒看门狗引入**之前**，结论已被看门狗污染：会同时打印「恢复广播于 ~25 秒」和「设备 100 秒内始终没有察觉断开」两句互相矛盾的话 |
-| 21 | `pwa/app.js:640-645` | `currentSource()` 的 `if` 块里只有注释，整个函数等价于 `return $('editor').value`（死代码） |
-| 22 | `os/passport/config.py` | `LCD_SPI_MODE` / `BTN_RELEASED_MV` / `CW_REG_*` 五个常量定义后无人引用；`battery.py` 自己又定义了一套同名寄存器常量，与"config.py 是唯一事实来源"的说法冲突 |
-| 23 | 全仓 | `os/`、`tools/` 下有 7 个 `__pycache__` / 28 个 `.pyc`（电脑跑测试留下的）。`deploy.py` 会跳过它们，但仓库里应清理并加 `.gitignore` |
+**2026-08 复核：#12–#23 全部已修复。**
+
+复核方式不是"看代码像修了"，而是**逐条跑那条代码路径**（完整命令与输出见下表
+「验证」列，复核稿逻辑见本节的「复核方法」）。复核时有 **2 条最初被误判成
+仍未修**，原因值得记下来：文本搜索被"警告不要用这个 API"的**注释/docstring
+本身**骗到了（`#18` 的 `check(..., True)` 出现在一句说明里、`#19` 的
+`str.isalnum()` 出现在 `_safe_name()` 的 docstring 里）。判这类问题要么
+剔注释/docstring，要么用 `ast` 找真实调用 —— 见「复核方法」。
+
+| # | 位置 | 原问题 | 状态 | 验证 |
+| --- | --- | --- | --- | --- |
+| 12 | `tools/deploy.py` | `--dry-run` 在探测串口之后才判断 | `FIXED` | `deploy.py COM99 --dry-run`（不存在的口）→ exit 0 并打印计划 |
+| 13 | `tools/deploy.py` | `--clean` 无二次确认，失败即失去可启动系统 | `FIXED` | 不带 `--yes` 跑 `--clean` → exit 1，正文要求手输 `yes` |
+| 14 | `tools/check_pwa.py` | 图标缺失不影响退出码 | `FIXED` | `main()` 结尾 `return 1 if fails else 0`，缺失图标进 `fails` |
+| 15 | `tools/esp.py` | esptool v4 横幅匹配不上 → 误判 v5 | `FIXED` | `_major_from_text("esptool.py v4.7.0")`→4，`("esptool v5.4.0")`→5，`("4.7.0")`→4 |
+| 16 | `tools/esp.py` | v5 取值表缺 `watchdog_reset` | `FIXED` | `V5_VALUES["watchdog_reset"] == "watchdog-reset"` |
+| 17 | `tools/lint_micropython.py` | 单行 docstring 误报；`hw_selftest.py` 漏扫 | `FIXED` | 临时塞一个含 `.byteswap()` 的单行 docstring → 不报；`device_files()` 含 `tools/hw_selftest.py`（共 18 个设备端文件） |
+| 18 | `tools/test_audio.py` | `check(…, True)` 空洞断言 | `FIXED` | 剔注释后正则匹配 0 处（原命中那句是「真检查（不是 check(..., True)）」的说明） |
+| 19 | `tools/ble_client.py` | `str.isalnum()` 对中文为真；`--name` 不归一化 | `FIXED` | `ast` 找 `.isalnum` 属性 0 处；`push 时钟.py`→`app`，`--name Dice`→`dice`，都过 `_NAME_RE` |
+| 20 | `tools/ble_disconnect_test.py` | 结论被 25 秒看门狗污染 | `FIXED` | 已按"数字只有出现在看门狗触发之前才有意义"分支给结论 |
+| 21 | `pwa/app.js` | `currentSource()` 是死代码 | `FIXED` | 函数体就是一行 `return $('editor').value;` |
+| 22 | `os/passport/config.py` | 五个常量无人引用 | `FIXED` | 逐个扫 `os/` + `miniapps/`，五个都有引用者 |
+| 23 | 全仓 | `__pycache__`/`.pyc` 进仓库、无 `.gitignore` | `FIXED` | `git ls-files` 里 0 个；`.gitignore` 存在 |
+
+### 复核方法
+
+这次复核踩到的教训：**用文本搜索判断"某个 API 还在不在用"是不可靠的**。
+`#18`/`#19` 都因为注释或 docstring 里写了一模一样的字符串而误报成"仍未修"。
+可靠的做法：
+
+- 判断某个**调用**是否还在 → 用 `ast` 遍历找 `ast.Attribute`，而不是正则搜文本；
+- 判断某段**行为**是否还在 → 真的跑那条路径（如表里的 `deploy.py COM99 --dry-run`）。
+
+`tools/check_docs.py` 的 `check_known_issues()` 现在会校验每条的**状态标记**
+（`FIXED` / `待定` / `已定论` …）与编号连续性，防止这份清单再次悄悄漂移 ——
+但**它无法校验状态是不是真的**，那是人（或上面这种复核）的事。
 
 ---
 

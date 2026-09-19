@@ -121,6 +121,8 @@ def main():
     d._fb_bytes = 0
     d._win = bytearray(4)                     # set_window 的常驻参数缓冲
     d._swap = bytearray(64)                   # blit 的常驻翻转缓冲
+    d._fill_cache = {}                        # fill_rect 的纯色块缓存
+    d._fill_bytes = 0
     d.spi = FakeSPI()
     gpio = []
     d.cs = CsTrackingPin(gpio)
@@ -138,6 +140,52 @@ def main():
           "%d 次 write" % len(d.spi.writes))
     check("总字节数正确 (240*21*2)",
           sum(d.spi.writes) == 240 * 21 * 2, "实际 %d" % sum(d.spi.writes))
+
+    print("\n[1b] 纯色块缓存：命中时零分配，交替两色也应命中")
+    # fill_rect 原来每次调用都要 line = bytes(...)*w 再 block = line*rows 两次
+    # 分配（真机实测准备阶段 537 µs，而 bytes 重复本身约 0.3 µs/字节砍不掉）。
+    # 现在按 (颜色, 宽度) 缓存整块图案。
+    d.spi.writes = []
+    d.fill_rect(0, 0, 240, 8, D.NAVY)
+    navy_block = d._fill_cache[(D.NAVY, 240)]
+    check("图案字节就是 (hi, lo) 交替",
+          all(navy_block[i] == (D.NAVY >> 8 if i % 2 == 0 else D.NAVY & 0xFF)
+              for i in range(len(navy_block))),
+          "前 4 字节: %s" % list(navy_block[:4]))
+    check("块长 = w*2*rows（满宽 1920）", len(navy_block) == 240 * 2 * 4,
+          "len=%d" % len(navy_block))
+
+    d.fill_rect(0, 40, 240, 8, D.NAVY)
+    check("同色同宽命中同一块", d._fill_cache[(D.NAVY, 240)] is navy_block)
+
+    # UI 里最常见的模式：同一矩形交替两种颜色（进度条底/前景、Beats 脏矩形）
+    d.fill_rect(0, 60, 240, 8, D.RED)
+    red_block = d._fill_cache[(D.RED, 240)]
+    d.fill_rect(0, 60, 240, 8, D.NAVY)
+    d.fill_rect(0, 60, 240, 8, D.RED)
+    check("交替两色两格都命中，互不驱逐",
+          d._fill_cache.get((D.RED, 240)) is red_block
+          and d._fill_cache.get((D.NAVY, 240)) is navy_block,
+          "缓存键 %s" % sorted(d._fill_cache))
+    check("换色后图案正确",
+          red_block[0] == (D.RED >> 8) and red_block[1] == (D.RED & 0xFF),
+          "前 2 字节: %s" % list(red_block[:2]))
+
+    # 预算满了要整个丢掉重来，不能无上限涨
+    for c in (D.GREEN, D.BLUE, D.YELLOW, D.CYAN, D.MAGENTA, D.WHITE, D.SILVER):
+        d.fill_rect(0, 100, 240, 8, c)
+    check("缓存受预算限制（%d B）" % D.FILL_FB_BUDGET,
+          d._fill_bytes <= D.FILL_FB_BUDGET, "占用 %d" % d._fill_bytes)
+
+    d.drop_text_cache()
+    check("drop_text_cache() 连纯色块一起放掉",
+          not d._fill_cache and d._fill_bytes == 0)
+
+    d.spi.writes = []
+    d.fill_rect(0, 0, 240, 322, D.GREEN)        # 322 > 320，必然走裁剪 + tail 分支
+    check("带 tail 分支时总字节仍然精确",
+          sum(d.spi.writes) == 240 * 320 * 2,   # 高度被裁到 320
+          "实际 %d" % sum(d.spi.writes))
 
     print("\n[2] 各种几何都不能冒出大块分配")
     cases = [

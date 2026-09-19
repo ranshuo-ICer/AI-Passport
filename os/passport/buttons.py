@@ -37,14 +37,43 @@ class Buttons:
         self._frame = 0
 
     # ------------------------------------------------------------------ 读取
+    def _read_mv(self):
+        try:
+            return self.adc.read_uv() // 1000
+        except AttributeError:
+            return self.adc.read() * 3300 // 4095
+
     def raw_mv(self):
-        """多次采样取中位数，滤掉 ADC 抖动。"""
+        """多次采样取中位数，滤掉 ADC 抖动。
+
+        真机实测：**单次 ADC 读取就要 61 µs**，是这条路径的绝对大头（`read()`
+        原始值也一样慢，52 µs），所以采样次数才是主要成本；原来的
+        `list + append + sort()` 另外还要花约 55 µs，而且每 20 ms 就在热路径上
+        分配一个 list —— 这块板没有 PSRAM，没必要。
+
+        默认 4 采样走排序网络，**语义与原来完全一致**（等价于 sort 后取索引 2），
+        只是不再分配。
+        """
+        if self.samples == 4:
+            a = self._read_mv()
+            b = self._read_mv()
+            c = self._read_mv()
+            d = self._read_mv()
+            # 4 元素排序网络（5 次比较交换）：排完 c 就是"排序后索引 2"
+            if a > b:
+                a, b = b, a
+            if c > d:
+                c, d = d, c
+            if a > c:
+                a, c = c, a
+            if b > d:
+                b, d = d, b
+            if b > c:
+                b, c = c, b
+            return c
         vals = []
         for _ in range(self.samples):
-            try:
-                vals.append(self.adc.read_uv() // 1000)
-            except AttributeError:
-                vals.append(self.adc.read() * 3300 // 4095)
+            vals.append(self._read_mv())
         vals.sort()
         return vals[len(vals) // 2]
 

@@ -49,6 +49,11 @@ def rgb(r, g, b):
 # 4 KB 足够覆盖几个常见宽度，同时不会把堆切碎。
 TEXT_FB_BUDGET = 4096
 
+# fill_rect 每次推给 SPI 的分块大小。压到 2 KB 是为了让碎片化的堆也凑得出
+# 连续内存（历史事故：8160 字节的块直接 MemoryError）。这块缓冲现在是常驻的，
+# 所以不用再为分配代价留余量。
+FILL_CHUNK = 2048
+
 # ===========================================================================
 # 热点加速：viper
 #
@@ -160,6 +165,27 @@ def _to_be(buf):
     return out
 
 
+# --------------------------------------------------------------- 纯色填充图案
+# fill_rect 的历史包袱：每次调用都 `line = bytes(...)*w` 再 `block = line*rows`。
+# w=240 时那是 480 + 1920 字节两次分配，实测整段准备约 537 µs，而 fill_rect 的
+# 小矩形本来只花约 1.9 ms —— 光准备就占了近三成。
+#
+# 真机实测的三种铺法（目标 1920 字节，w=240）：
+#     bytes(2) * 960            571.7 µs   （一步，大 count）
+#     bytes(2)*240 再 *4        537.0 µs   （旧写法两步）
+#     bytearray(1920)           172.8 µs   （纯分配，但是零填充）
+#   结论：**`bytes` 重复约 0.3 µs/字节，是这段开销的本质**，怎么拆都一样；
+#   bytearray 分配快 3 倍但它填的是 0，还得再铺一遍图案。
+#   还试过两种"更聪明"的铺法，都更慢，别改回去：
+#     - viper 逐字节循环填 1920 字节：交替两色时比旧实现慢 15%；
+#     - 写 2 字节后 `buf[a:b] = buf[0:n]` 对折复制：慢 214%（1.0 ms -> 3.1 ms）。
+#
+# 所以唯一的出路是**别重复铺**：按 (颜色, 宽度) 缓存整块图案。
+# UI 里最常见的模式恰恰是"同一个矩形交替两种颜色"（进度条的底+前景、
+# Beats 脏矩形的开/关），两格缓存就能把这两种情况都变成零开销。
+FILL_FB_BUDGET = 6144        # 纯色块缓存预算（字节）；满宽一块 1920 B，够放 3 色
+
+
 # ST7789P3 厂商专属初始化序列：(命令, 参数, 延时ms)
 # 注意 0xD0 连发两次，第二次覆盖第一次 —— 这是参考例程的原样，不要"优化"掉。
 VENDOR_INIT = (
@@ -206,8 +232,11 @@ class Display:
         # 常驻小缓冲，避免热路径上反复分配：
         #   _win  —— set_window 的 4 字节参数
         #   _swap —— blit 的字节序翻转输出（按需增长，只增不减）
+        #   _fill_cache —— fill_rect 的纯色块，按 (颜色, 宽度) 缓存
         self._win = bytearray(4)
         self._swap = bytearray(64)
+        self._fill_cache = {}
+        self._fill_bytes = 0
 
         self._init_panel()
         self.backlight(backlight)
@@ -313,33 +342,40 @@ class Display:
         h = y1 - y0
 
         self.set_window(x0, y0, x1 - 1, y1 - 1)
-        line = bytes((color >> 8, color & 0xFF)) * w
-        # 分块推送。临时缓冲是 line * n = w*2*n 字节，必须把 n 压住：
-        # 原来按「8192 字节一块」折算，w=240 时 n=17，也就是每次满宽填充都要
+        # 分块推送。临时缓冲是 w*2*rows 字节，必须把 rows 压住：
+        # 原来按「8192 字节一块」折算，w=240 时 rows=17，也就是每次满宽填充都要
         # 一次性分配 8160 字节。堆里即使有 43 KB 空闲，碎片化之后也凑不出
         # 连续的 8 KB，于是直接 MemoryError —— 实测 Beats 就是这么挂的，
         # 而且它影响所有满宽填充的小程序。
         # 现在每块最多约 2 KB，碎片化的堆也扛得住。
-        rows = 2048 // (w * 2)
+        rows = FILL_CHUNK // (w * 2)
         if rows < 1:
             rows = 1
-        # 整块只分配一次，循环里复用。
-        # 原来是每次 self.spi.write(line * n) 都重新拼一个大 bytes ——
-        # 整屏填充要重复 80 次，实测把 70 ms 里的一大半花在分配和 GC 上。
-        # 实测：SPI 本身能跑 38 Mbit/s，而原来的 fill 只跑到 17 Mbit/s。
-        block = line * rows
-        block_n = len(block)
+        need = rows * w * 2
+        # 纯色块缓存：命中就整段复用，一次分配、一次铺图案都不用。
+        key = (color, w)
+        buf = self._fill_cache.get(key)
+        if buf is None or len(buf) != need:
+            line = bytes((color >> 8, color & 0xFF)) * w
+            buf = line * rows
+            # 预算还有余量才入缓存。满了**既不清空也不插入** ——
+            # 清空会让"颜色很多"的场景反复重铺，比不缓存还慢（真机 A/B 实测 +11%）；
+            # 不插入则最坏情况就退回旧实现的代价，不会倒扣。
+            if self._fill_bytes + need <= FILL_FB_BUDGET:
+                self._fill_cache[key] = buf
+                self._fill_bytes += need
         self.dc(1)
         self.cs(0)
         done = 0
         while done < h:
             if done + rows <= h:
-                self.spi.write(block)
+                self.spi.write(buf)
                 done += rows
             else:
-                # 只有最后不足一块时才另拼一次
+                # 最后不足一块：切一段 memoryview，不再另拼一个 bytes
+                # （图案是 2 字节周期，任意偶数长度都对）
                 tail = h - done
-                self.spi.write(line * tail)
+                self.spi.write(memoryview(buf)[:tail * w * 2])
                 done += tail
         self.cs(1)
 
@@ -421,6 +457,9 @@ class Display:
         """
         self._fb_cache.clear()
         self._fb_bytes = 0
+        # 纯色块缓存也一起放掉：它单块 1.9 KB，同样会把堆切碎
+        self._fill_cache.clear()
+        self._fill_bytes = 0
 
     def text(self, s, x, y, color, bg=BLACK):
         """8x8 等宽 ASCII 文字。bg=None 时用黑色填充。"""

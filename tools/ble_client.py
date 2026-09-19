@@ -189,7 +189,7 @@ async def cmd_ls(cli):
     return m
 
 
-async def cmd_push(cli, path, name, title, run_after):
+async def cmd_push(cli, path, name, title, run_after, force_chunk=0):
     with open(path, "rb") as f:
         data = f.read()
     print("推送 %s (%d 字节) 为 %r …" % (path, len(data), name))
@@ -200,7 +200,23 @@ async def cmd_push(cli, path, name, title, run_after):
         print("  [X] %s" % m.get("m"))
         return False
 
-    chunk = 160
+    # 分片大小按**协商到的 MTU** 来，不要再硬编码。
+    # 原来写死 160，而设备侧 BLE_MTU = 247、实测协商结果也是 247 ——
+    # 每个分片白白浪费 84 字节；而**每个分片都是一次 ATT 往返 + 一次 ack 通知**，
+    # 分片数就是吞吐瓶颈。
+    # ⚠ 注意 BleakClient 在 cli.c 里，不是 cli 本身；取不到就**退回 160**
+    #   （实测可用值），绝不能退回 23 算出的 20 —— 那会让推送慢 6 倍（实测过）。
+    if force_chunk:
+        chunk = force_chunk
+        print("  指定分片 %d 字节" % chunk)
+    else:
+        mtu = getattr(getattr(cli, "c", None), "mtu_size", 0) or 0
+        if mtu > 23:
+            chunk = max(20, min(240, mtu - 3))
+            print("  协商 MTU %d，分片 %d 字节" % (mtu, chunk))
+        else:
+            chunk = 160
+            print("  未取到 MTU，沿用默认分片 %d 字节" % chunk)
     off = 0
     while off < len(data):
         piece = data[off:off + chunk]
@@ -310,7 +326,8 @@ async def run(args):
         elif args.action == "repro":
             await cmd_repro(cli)
         elif args.action == "push":
-            ok = await cmd_push(cli, args.path, args.name, args.title, args.run)
+            ok = await cmd_push(cli, args.path, args.name, args.title, args.run,
+                                args.chunk)
             return 0 if ok else 1
         elif args.action == "run":
             # 位置参数和 --name 都接受：docstring 里写的是 `run clock`，
@@ -389,6 +406,8 @@ def main():
     ap.add_argument("--name", default=None)
     ap.add_argument("--title", default=None)
     ap.add_argument("--run", action="store_true", help="push 完立即运行")
+    ap.add_argument("--chunk", type=int, default=0,
+                    help="push 的分片字节数；0 = 按协商 MTU 自动（便于实测对比）")
     args = ap.parse_args()
 
     if args.action == "push":

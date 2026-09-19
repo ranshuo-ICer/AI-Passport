@@ -95,6 +95,7 @@ class Shell:
         self._app = None          # {"name":..,"mod":..,"ctx":..}
         self._ok_since = None
         self._status = None
+        self._status_sig = None   # draw_status 的廉价指纹，避免每 tick 拼串
         self._menu_dirty = True
         self._frames = 0
         self._last_key = None
@@ -240,6 +241,19 @@ class Shell:
                  disp.YELLOW if selected else disp.GREY, bg)
 
     def draw_status(self, force=False):
+        # 每 tick（50 Hz）都会被调一次，而绝大多数时候什么都没变。所以先比一个
+        # 廉价指纹（几个属性 + link.progress_key()），只有它变了才去拼字符串 ——
+        # 拼一次实测 157 µs，纯浪费。
+        # ⚠ 指纹必须覆盖下面读到的每个字段；漏一个的状态栏就会卡住不刷新。
+        # 用 `_status is not None` 做前置条件，是为了让"把 _status 置 None 来强制
+        # 重绘"的既有写法继续生效（否则会卡在指纹相等上，永远不重绘）。
+        sig = (self.link.uploading, self.link.connected, self.battery.ok,
+               self.battery.percent, self.battery.millivolts,
+               self.link.progress_key())
+        if not force and self._status is not None and sig == self._status_sig:
+            return
+        self._status_sig = sig
+
         text = ""
         if self.link.uploading:
             text = self.link.status_text()
@@ -261,7 +275,14 @@ class Shell:
         self.link.poll()
         self.battery.poll()
 
-        key = self.buttons.update()
+        key = None
+        if self._frames % C.BTN_POLL_DIV == 0:
+            # 按键 ADC 是每 tick 最贵的一项（update() 实测约 300 µs，其中单次
+            # 读取就 61 µs × 4 次采样），而消抖只要求"连续两次一致" —— 所以
+            # 隔 tick 读一次完全够用，采样率仍有 25 Hz。
+            # 跳过的 tick 里 key 保持 None（= 没有新按下），held 继续用上一次
+            # 消抖结果，长按计时不受影响。
+            key = self.buttons.update()
         held = self.buttons.current()
 
         # 长按 OK 计时

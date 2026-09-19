@@ -479,6 +479,19 @@ class AppLink:
     def uploading(self):
         return self._up is not None
 
+    def progress_key(self):
+        """`status_text()` 的廉价指纹 —— 它变了，状态栏才可能变。
+
+        状态栏每 tick（50 Hz）都会重算一次，而 99.99% 的时间内容根本没变；
+        拼一次字符串实测 157 µs，先比这个元组就能整段省掉。
+        ⚠ 必须覆盖 `status_text()` 读的**每一个**字段，否则状态栏会卡住不刷新。
+        """
+        if self.conn is None:
+            return 0
+        if self._up is None:
+            return 1
+        return (2, self._up["n"], self._up["got"], self._up["size"])
+
     def status_text(self):
         if self.conn is None:
             return "BLE 等待连接"
