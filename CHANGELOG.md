@@ -98,7 +98,7 @@
   - 显示驱动（ST7789P3 厂商序列）、三键 ADC、CW2017 电量计、ES8311 播放、BLE 推送
   - 启动器 + 小程序运行时（`ctx` API、`kv_*` 掉电保持）
 - **手机端 App**：Web Bluetooth PWA（无需 APK，`pwa/`）
-- **工具链**：部署 / 托管 / 测试 / 诊断共 17 个脚本
+- **工具链**：部署 / 托管 / 测试 / 诊断共 18 个脚本
 - 5 个内置示例小程序（`os/builtin/`）：Clock、Dice、Sound、System、Mu Yu
 
 ### 真机验证
