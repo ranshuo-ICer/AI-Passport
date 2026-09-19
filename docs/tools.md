@@ -32,6 +32,7 @@
 | `repro_ping_corruption.py` | 电脑 | **复现 KNOWN_ISSUES #1**：上传期间心跳污染 `app.py`。exit 1 = 缺陷仍在 |
 | `test_audio.py` | 电脑 | ES8311 寄存器序列 / 分频 / 音量 / I2S 参数单测 |
 | `test_display.py` | 电脑 | **display 的分配行为**：`fill_rect` 单次 SPI 写入不得出现大块连续分配 |
+| `test_menu.py` | 电脑 | **主菜单布局**：把每笔绘制录下来算包围盒，断言逐行三栏（序号/标题/尺寸）不重叠且全在屏内 |
 | `lint_micropython.py` | 电脑 | 静态拦截"CPython 有、MicroPython 没有"的 API |
 | `check_pwa.py` | 电脑 | 前端 JS 语法 + DOM id 一致性检查 |
 | `check_docs.py` | 电脑 | **文档↔代码一致性自检**（链接 / 数量 / 常量 / 协议 / API / 固件哈希） |

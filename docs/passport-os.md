@@ -268,7 +268,7 @@ def teardown(ctx): ...   # 退出前调用一次
 | `launch(name)` | 加载 app.py，调用 setup，通知手机 state |
 | `stop_app()` | 调用 teardown，kv_flush，通知手机 |
 | `_call(name, *args)` | 安全调用小程序钩子（异常记日志不崩溃） |
-| `draw_menu()` / `_draw_row()` | 绘制主菜单（标题栏/状态栏/列表/页脚） |
+| `draw_menu()` / `_draw_row()` | 绘制主菜单（标题栏/状态栏/列表/页脚）。每行三栏：**序号**（绝对位置 `idx+1`，滚动后不重新编号）/ 标题（最多 20 字符）/ 尺寸。布局由 [`tools/test_menu.py`](../tools/test_menu.py) 离线守护 |
 | `draw_status(force)` | 状态栏：BLE 状态 + 电量 |
 | `tick()` | 主循环单帧：poll BLE + 电池 + 按键 → 菜单/运行分发 |
 | `_tick_menu(key)` | 菜单态：UP/DOWN 移动，OK 启动 |

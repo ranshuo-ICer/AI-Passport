@@ -237,8 +237,16 @@ class Shell:
         lcd.fill_rect(0, y, lcd.w, ROW_H - 2, bg)
         if selected:
             lcd.fill_rect(0, y, 4, ROW_H - 2, disp.YELLOW)
+        # 序号取的是**绝对位置** idx+1，不是屏幕行号 row+1 —— 列表滚动之后
+        # 行号会从 1 重新开始，那样这个数字就没有意义了。
+        # 用 %2d 右对齐，个位数和两位数的小数位能对齐，看起来是一列。
+        lcd.text("%2d" % (idx + 1), 8, y + 6,
+                 disp.YELLOW if selected else disp.GREY, bg)
         title = app.get("title") or app["n"]
-        lcd.text(title[:26], 10, y + 6, fg, bg)
+        # 标题区从 30 开始：左边让给 4px 选中条 + 16px 序号（8..24）。
+        # 右边被尺寸文字占掉（最宽 "9999K" = 40px，从 x=196 起），
+        # 所以标题最多 20 个字符（160px）—— 留一点余量，别贴上去。
+        lcd.text(title[:20], 30, y + 6, fg, bg)
         size = "%dK" % max(1, app["s"] // 1024)
         lcd.text(size, lcd.w - 8 * len(size) - 4, y + 6,
                  disp.YELLOW if selected else disp.GREY, bg)
