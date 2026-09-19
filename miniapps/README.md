@@ -17,6 +17,7 @@
 | [`metronome.py`](metronome.py) | **Metronome** | 节拍器 40–240 BPM，四分音符重音，**跑着也能调速度** | 3.6 KB |
 | [`memory.py`](memory.py) | **Memory** | 记忆序列。屏幕亮格 + 发对应音高，逐关加长 | 4.6 KB |
 | [`repeater.py`](repeater.py) | **Repeater** | 复读机：按一下录、再按一下循环放。**实验性**，见下方说明 | 13.4 KB |
+| [`beats.py`](beats.py) | **Beats** | **4 轨 16 步鼓机**：底鼓/军鼓/踩镲/贝斯边跑边编，长按 UP/DOWN 调速，节奏型掉电保留 | 13.8 KB |
 
 > 「设备菜单名」就是源码里的 `TITLE` 常量 —— 推送时 App 会让你填标题，
 > 填什么就显示什么；用内置方式安装时则以 `meta.json` 里的 `title` 为准。
@@ -68,7 +69,7 @@ done
 把某个 `.py` 连同 `meta.json` 放进 [`../os/builtin/`](../os/builtin/) 下的一个目录，
 再跑 `python tools/deploy.py`，它就会作为内置小程序出现在设备上。
 
-> 设备最多 12 个小程序（`config.MAX_APPS`）。
+> 设备最多 32 个小程序（`config.MAX_APPS`）。
 
 ---
 

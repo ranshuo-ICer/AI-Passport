@@ -1,10 +1,8 @@
 """Repeater - press OK to record, press again to stop and loop-play.
 
-ASCII-ONLY and kept small on purpose. See docs/KNOWN_ISSUES.md #1: a BLE
-upload over 10s gets the phone heartbeat injected into app.py and loses its
-tail; if the cut splits a UTF-8 char, read_source() raises UnicodeError and the
-device shows "LOAD FAILED". Fewer bytes = fewer chunks = less risk, and ASCII
-means a bad cut can only ever be a plain SyntaxError.
+ASCII-only on purpose: the firmware's built-in font is 8x8 ASCII only, so any
+non-ASCII byte just renders as garbage. (The old "uploads over 10s get the
+heartbeat injected and the tail lost" caveat is gone - fixed in known-issues.md #1.)
 
 Hard-won on the real device:
   1. Recording works - the owner handoff below does capture from the ES8311.

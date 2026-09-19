@@ -265,7 +265,7 @@ def on_key(ctx, key):
 | 限制 | 值 | 在哪定义 |
 | --- | --- | --- |
 | 单个小程序大小 | 32 KB | `config.MAX_APP_SIZE` |
-| 小程序数量 | 12 | `config.MAX_APPS` |
+| 小程序数量 | 32 | `config.MAX_APPS` |
 | 名字规则 | `[a-z0-9_-]{1,16}` | `apps.valid_name()` |
 | 通知单包 | ≤ MTU-3（上限 180）；**MTU=23 时会超限，见 KNOWN_ISSUES #3** | `blepush._write_rsp()` 的分片逻辑 |
 | 手机写入分片 | 起始 160，失败减半，最小 20 | `pwa/app.js` |

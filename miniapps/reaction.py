@@ -7,9 +7,9 @@ OK    start a round / after a result, go again
 Best time is kept across power loss. Whole-screen colour is the stimulus, so
 it is readable out of the corner of your eye.
 
-ASCII-only and small on purpose: see docs/KNOWN_ISSUES.md #1 - a BLE upload
-over 10s gets the phone heartbeat injected into app.py and loses its tail, and
-a cut inside a UTF-8 char turns into UnicodeError / "LOAD FAILED".
+ASCII-only on purpose: the firmware's built-in font is 8x8 ASCII only, so any
+non-ASCII byte just renders as garbage. (The old "uploads over 10s get the
+heartbeat injected and the tail lost" caveat is gone - fixed in known-issues.md #1.)
 """
 
 import random

@@ -54,7 +54,7 @@
 | 音频 | `I2S_MCLK/BCLK/WS/DOUT/DIN` | 播放已实现（BCLK 倍频，不用 MCLK） |
 | BLE | `BLE_NAME`, `UUID_SERVICE/CMD/RSP`, `BLE_MTU=247` | GATT 服务定义 |
 | BLE | `BLE_ATTR_MAX_LEN=2048`, `BLE_IDLE_TIMEOUT_MS=25000` | 特征值缓冲 / 空闲看门狗 |
-| 存储 | `APPS_DIR="/apps"`, `MAX_APP_SIZE=32KB`, `MAX_APPS=12` | 小程序限制 |
+| 存储 | `APPS_DIR="/apps"`, `MAX_APP_SIZE=32KB`, `MAX_APPS=32` | 小程序限制 |
 
 ### 2.2 `display.py` —— ST7789P3 显示驱动
 

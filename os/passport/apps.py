@@ -19,6 +19,7 @@ ctx 提供（完整说明见 docs/ble-protocol.md）：
     ctx.kv_get(k, d) / ctx.kv_set(k, v) / ctx.kv_flush()   （掉电保持）
 """
 
+import gc
 import os
 import json
 
@@ -133,8 +134,34 @@ def read_source(name):
 
 
 def load_module(name):
-    """把 app.py 执行进一个全新的命名空间，返回该命名空间。"""
-    src = read_source(name)
-    mod = {"__name__": "app_" + name}
-    exec(compile(src, app_file(name), "exec"), mod)
-    return mod
+    """把 app.py 执行进一个全新的命名空间，返回该命名空间。
+
+    这里有三层讲究，都是被真机逼出来的：
+
+    1. **先编译、再丢掉源码、最后执行**。原来的写法把 src 一直持有到 exec
+       结束，等于源码和字节码同时常驻。del + gc.collect() 让源码在 exec 前
+       就还回去。
+
+    2. **读文件前先 gc.collect()**。`f.read()` 要一次性要一块和文件等长的
+       【连续】内存，而这块板没有 PSRAM、堆常年碎片化 —— 实测出现过
+       "还有 78 KB 空闲却分配不出 19 KB" 的情况。collect 能合并空闲块。
+
+    3. **失败就回收重试一次**。碎片是随运行状态波动的：同一个 28 KB 文件，
+       有一次能进、下一次就 MemoryError。重试几乎总能成功，比让用户去
+       重启设备强得多。
+    """
+    last = None
+    for attempt in (1, 2):
+        try:
+            gc.collect()
+            src = read_source(name)
+            code = compile(src, app_file(name), "exec")
+            del src
+            gc.collect()
+            mod = {"__name__": "app_" + name}
+            exec(code, mod)
+            return mod
+        except MemoryError as exc:
+            last = exc
+            gc.collect()
+    raise last

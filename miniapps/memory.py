@@ -7,9 +7,9 @@ One mistake ends the run. Best level is kept across power loss.
 This is the one app that uses both output channels at once (screen + speaker),
 which is why it exists at all on a three-button board.
 
-ASCII-only and small on purpose: see docs/KNOWN_ISSUES.md #1 - a BLE upload
-over 10s gets the phone heartbeat injected into app.py and loses its tail, and
-a cut inside a UTF-8 char turns into UnicodeError / "LOAD FAILED".
+ASCII-only on purpose: the firmware's built-in font is 8x8 ASCII only, so any
+non-ASCII byte just renders as garbage. (The old "uploads over 10s get the
+heartbeat injected and the tail lost" caveat is gone - fixed in known-issues.md #1.)
 """
 
 import random

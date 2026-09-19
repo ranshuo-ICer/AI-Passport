@@ -45,6 +45,11 @@ def rgb(r, g, b):
     return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3)
 
 
+# 文字帧缓冲缓存的总预算（字节）。见 _text_fb() 的说明。
+# 4 KB 足够覆盖几个常见宽度，同时不会把堆切碎。
+TEXT_FB_BUDGET = 4096
+
+
 def _to_be(buf):
     """RGB565 小端字节序 → ST7789 需要的高位在前。
 
@@ -91,6 +96,7 @@ class Display:
         self.w = C.LCD_W
         self.h = C.LCD_H
         self._fb_cache = {}
+        self._fb_bytes = 0
 
         # SPI mode 由 config 的 LCD_SPI_MODE 推导：bit0=polarity, bit1=phase。
         # 本屏是 mode 0（SCK 空闲低、上升沿采样）。
@@ -181,7 +187,13 @@ class Display:
 
         self.set_window(x0, y0, x1 - 1, y1 - 1)
         line = bytes((color >> 8, color & 0xFF)) * w
-        rows = 8192 // (w * 2)
+        # 分块推送。临时缓冲是 line * n = w*2*n 字节，必须把 n 压住：
+        # 原来按「8192 字节一块」折算，w=240 时 n=17，也就是每次满宽填充都要
+        # 一次性分配 8160 字节。堆里即使有 43 KB 空闲，碎片化之后也凑不出
+        # 连续的 8 KB，于是直接 MemoryError —— 实测 Beats 就是这么挂的，
+        # 而且它影响所有满宽填充的小程序。
+        # 现在每块最多约 2 KB，碎片化的堆也扛得住。
+        rows = 2048 // (w * 2)
         if rows < 1:
             rows = 1
         self.dc(1)
@@ -234,12 +246,31 @@ class Display:
     def _text_fb(self, width):
         fb = self._fb_cache.get(width)
         if fb is None:
-            if len(self._fb_cache) > 16:
+            need = width * 8 * 2
+            # 按【总字节数】而不是【条目数】设限。
+            # 原来是"超过 16 条就全清"，可 16 条宽字符串轻轻松松吃掉十几 KB，
+            # 而且都是几十~几千字节的中等块 —— 堆被切得七零八落之后，
+            # 连"还剩 78 KB 空闲"都分配不出一个 19 KB 的连续块。
+            # 实测：小程序载入上限因此被压在 16 KB（20 KB 就 MemoryError），
+            # 而上传上限是 32 KB。压住这块缓存之后载入上限才提得上去。
+            if self._fb_bytes + need > TEXT_FB_BUDGET:
                 self._fb_cache.clear()
-            fb = framebuf.FrameBuffer(bytearray(width * 8 * 2), width, 8,
+                self._fb_bytes = 0
+            fb = framebuf.FrameBuffer(bytearray(need), width, 8,
                                       framebuf.RGB565)
             self._fb_cache[width] = fb
+            self._fb_bytes += need
         return fb
+
+    def drop_text_cache(self):
+        """丢掉文字帧缓冲缓存，把连续空闲内存让给大块分配。
+
+        载入小程序前调用：`read_source()` 要一次性要一块和文件等长的连续内存，
+        而缓存里那几十个中等大小的块正好把堆切碎 —— 实测启动器画完菜单后
+        载入 32 KB 程序会 MemoryError，先清掉这里就能进去。
+        """
+        self._fb_cache.clear()
+        self._fb_bytes = 0
 
     def text(self, s, x, y, color, bg=BLACK):
         """8x8 等宽 ASCII 文字。bg=None 时用黑色填充。"""

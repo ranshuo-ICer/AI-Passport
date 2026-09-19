@@ -128,6 +128,11 @@ class Shell:
             return False
         if self._app is not None:
             self.stop_app()
+        # 载入前先把自己的缓存清空、再回收一次：菜单刚画完，文字帧缓冲缓存里
+        # 全是中等大小的块，正好把堆切碎，让 read_source() 要不到一整块连续内存。
+        # 实测不清这一步，启动器里载入 32 KB 程序会 MemoryError。
+        self.lcd.drop_text_cache()
+        gc.collect()
         try:
             mod = apps.load_module(name)
         except Exception as e:                            # noqa: BLE001

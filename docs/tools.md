@@ -23,6 +23,7 @@
 | `test_protocol.py` | 电脑 | BLE 协议状态机单测（桩模块，无需硬件） |
 | `repro_ping_corruption.py` | 电脑 | **复现 KNOWN_ISSUES #1**：上传期间心跳污染 `app.py`。exit 1 = 缺陷仍在 |
 | `test_audio.py` | 电脑 | ES8311 寄存器序列 / 分频 / 音量 / I2S 参数单测 |
+| `test_display.py` | 电脑 | **display 的分配行为**：`fill_rect` 单次 SPI 写入不得出现大块连续分配 |
 | `lint_micropython.py` | 电脑 | 静态拦截"CPython 有、MicroPython 没有"的 API |
 | `check_pwa.py` | 电脑 | 前端 JS 语法 + DOM id 一致性检查 |
 | `check_docs.py` | 电脑 | **文档↔代码一致性自检**（链接 / 数量 / 常量 / 协议 / API / 固件哈希） |
@@ -116,7 +117,7 @@ python tools/esp.py --chip esp32c3 --baud 460800 write_flash -z 0x0 firmware/xxx
 
 ```sh
 python tools/test_audio.py         # 90 项：ES8311 寄存器/分频/音量/I2S 参数
-python tools/lint_micropython.py   # 扫 os/ 下 15 个设备端文件
+python tools/lint_micropython.py   # 扫 os/ + hw_selftest + 小程序，共 18 个设备端文件
 python tools/check_pwa.py          # 前端 JS 语法 + DOM id 一致性
 python tools/check_docs.py         # 文档↔代码一致性（改完文档/代码都该跑）
 python tools/repro_ping_corruption.py   # 复现 KNOWN_ISSUES #1（修复前红、修复后绿）
