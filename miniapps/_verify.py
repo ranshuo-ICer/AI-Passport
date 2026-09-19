@@ -44,26 +44,43 @@ class LCD:
             self.oob.append("%s x=%d y=%d w=%d h=%d -> (%d,%d)"
                             % (what, x, y, w, h, x + w, y + h))
 
+    def _color(self, what, *vals):
+        """颜色必须是整数。
+
+        真机上把非整数传给 fill_rect 会在 Display 里 `color >> 8` 直接 TypeError，
+        而桩件原来照单全收 —— stardex.py 就把一个同名数据集元组覆盖到了颜色常量
+        上，`_verify.py` 一路绿灯，直到按显示列表重放才炸出来。
+        """
+        for v in vals:
+            if v is not None and not isinstance(v, int):
+                self.bad.append("%s 颜色不是整数: %r" % (what, v))
+
     def fill(self, c):
-        pass
+        self._color("fill", c)
 
     def fill_rect(self, x, y, w, h, c):
         self._c(x, y, w, h, "fill_rect")
+        self._color("fill_rect", c)
 
     def rect(self, x, y, w, h, c):
         self._c(x, y, w, h, "rect")
+        self._color("rect", c)
 
     def hline(self, x, y, w, c):
         self._c(x, y, w, 1, "hline")
+        self._color("hline", c)
 
     def vline(self, x, y, h, c):
         self._c(x, y, 1, h, "vline")
+        self._color("vline", c)
 
     def text(self, s, x, y, c, bg=None):
         self._c(x, y, len(str(s)) * 8, 8, "text(%r)" % s)
+        self._color("text(%r)" % s, c, bg)
 
     def text_scale(self, s, x, y, c, bg=None, scale=1):
         self._c(x, y, len(str(s)) * 8 * scale, 8 * scale, "text_scale(%r)" % s)
+        self._color("text_scale(%r)" % s, c, bg)
 
     def text2x(self, s, x, y, c, bg=None):
         self.text_scale(s, x, y, c, bg, 2)
@@ -340,9 +357,13 @@ def main():
         print("  [FAIL] exec: %s: %s" % (type(e).__name__, e))
         return 1
 
-    for fn in ("setup", "loop", "on_key", "teardown"):
-        if fn not in g and fn != "loop":
-            print("  [warn] 缺少 %s()" % fn)
+    # setup / on_key / teardown 是必需的（loop 可选）。原来只是 [warn] 一句，
+    # 然后 step() 里照样 g["on_key"](...) —— 缺钩子的小程序会在这里抛 KeyError，
+    # 报出来的是桩件的行号，而不是"你少写了 on_key"。现在直接判失败。
+    missing = [fn for fn in ("setup", "on_key", "teardown") if fn not in g]
+    if missing:
+        print("  [FAIL] 缺少必需钩子: %s" % ", ".join("%s()" % m for m in missing))
+        return 1
 
     keys = [k for k in args.keys.split(",") if k]
     trace = []
@@ -386,7 +407,7 @@ def main():
             print("         " + m)
     if ctx.lcd.bad:
         ok = False
-        print("  [FAIL] %d 处非法尺寸:" % len(ctx.lcd.bad))
+        print("  [FAIL] %d 处非法参数（尺寸/颜色类型等）:" % len(ctx.lcd.bad))
         for m in ctx.lcd.bad[:6]:
             print("         " + m)
     if non_ascii:
