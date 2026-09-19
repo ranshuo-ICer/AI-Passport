@@ -285,13 +285,23 @@ I2S + 重跑 codec 配置），让 repeater 不再需要替换外壳的实例。
 | 14 | `tools/check_pwa.py` | 图标缺失不影响退出码 | `FIXED` | `main()` 结尾 `return 1 if fails else 0`，缺失图标进 `fails` |
 | 15 | `tools/esp.py` | esptool v4 横幅匹配不上 → 误判 v5 | `FIXED` | `_major_from_text("esptool.py v4.7.0")`→4，`("esptool v5.4.0")`→5，`("4.7.0")`→4 |
 | 16 | `tools/esp.py` | v5 取值表缺 `watchdog_reset` | `FIXED` | `V5_VALUES["watchdog_reset"] == "watchdog-reset"` |
-| 17 | `tools/lint_micropython.py` | 单行 docstring 误报；`hw_selftest.py` 漏扫 | `FIXED` | 临时塞一个含 `.byteswap()` 的单行 docstring → 不报；`device_files()` 含 `tools/hw_selftest.py`（共 18 个设备端文件） |
+| 17 | `tools/lint_micropython.py` | 单行 docstring 误报；`hw_selftest.py` 漏扫 | `FIXED` | 临时塞一个含 `.byteswap()` 的单行 docstring → 不报；`device_files()` 含 `tools/hw_selftest.py`（当时 18 个；这个数字后来暴露了 #26） |
 | 18 | `tools/test_audio.py` | `check(…, True)` 空洞断言 | `FIXED` | 剔注释后正则匹配 0 处（原命中那句是「真检查（不是 check(..., True)）」的说明） |
 | 19 | `tools/ble_client.py` | `str.isalnum()` 对中文为真；`--name` 不归一化 | `FIXED` | `ast` 找 `.isalnum` 属性 0 处；`push 时钟.py`→`app`，`--name Dice`→`dice`，都过 `_NAME_RE` |
 | 20 | `tools/ble_disconnect_test.py` | 结论被 25 秒看门狗污染 | `FIXED` | 已按"数字只有出现在看门狗触发之前才有意义"分支给结论 |
 | 21 | `pwa/app.js` | `currentSource()` 是死代码 | `FIXED` | 函数体就是一行 `return $('editor').value;` |
 | 22 | `os/passport/config.py` | 五个常量无人引用 | `FIXED` | 逐个扫 `os/` + `miniapps/`，五个都有引用者 |
 | 23 | 全仓 | `__pycache__`/`.pyc` 进仓库、无 `.gitignore` | `FIXED` | `git ls-files` 里 0 个；`.gitignore` 存在 |
+| 26 | `tools/lint_micropython.py` | **只读文件头 2000 字节**判断是不是小程序，于是钩子定义在后面的小程序全被漏扫 | `FIXED` | 改成读整个文件后，扫描数 **18 → 28**；补扫的 10 个文件里没有新违规 |
+
+`#26` 说明：这是 `#17`（同一个工具的另一个盲点）**修完之后仍然存在**的问题，
+而且很隐蔽 —— 工具打印"没有发现 MicroPython 不支持的 API 用法 ✓"，看起来是绿的。
+实测漏扫的是 `beats` / `repeater` / `metronome` / `memory` / `snake` / `timer`
+等**最长最复杂**的那批文件，也就是最容易踩 MicroPython API 坑的地方。
+新增小程序时才发现，因为它们的 `def setup(ctx)` 恰好都在 2000 字节之后。
+
+教训和 `#18`/`#19` 那次的复核一样：**"检查通过"必须先确认检查范围真的覆盖了目标**。
+一个只扫了一部分文件的检查器，绿灯是没有意义的。
 
 ### 复核方法
 

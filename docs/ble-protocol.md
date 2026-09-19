@@ -156,6 +156,7 @@ def teardown(ctx): ...             # 退出前调用一次
 | `ctx.frame` | 自启动以来的帧序号 |
 | `ctx.name` | 当前小程序名（即 `/apps/` 下的目录名） |
 | `ctx.battery` | `ctx.battery.label()` → `"87%"` 或 `"4102mV"` |
+| `ctx.buttons` | 按键对象。`check()` → `(毫伏, 键名)`；`voltage()` 上一次读数；`current()` 当前按住的键。**诊断用**（重标定 `config.BTN_WINDOWS`） |
 | `ctx.audio` | 音频对象，**可能为 `None`**（初始化失败时），用前必须先判空，见下 |
 | `ctx.log(msg)` | 打印到手机 App 的日志页 |
 | `ctx.exit()` | 请求退回主菜单 |

@@ -248,6 +248,7 @@ class Ctx:
         self.battery = Battery()
         self.audio = None
         self.shell = Shell()
+        self.buttons = self.shell.buttons
         self.name = "test"
         self.kv = {}
         self.flushes = 0
@@ -272,6 +273,7 @@ class Battery:
     def label(self):
         return "85%"
 
+    ok = True
     percent = 85
     millivolts = 4085
 
@@ -288,7 +290,21 @@ class Link:
 
 
 class Buttons:
+    """ADC stub. `check()` reports the released voltage so diagnostics apps have
+    a sane reading; `current()` stays None because no key is physically held."""
+
+    mv = 2900
+
     def current(self):
+        return None
+
+    def voltage(self):
+        return self.mv
+
+    def check(self):
+        return (self.mv, None)
+
+    def update(self):
         return None
 
 

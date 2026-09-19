@@ -362,9 +362,20 @@ async def run(args):
                             "tz": -time.timezone})
             print(await cli.wait(["time", "err"]))
         elif args.action == "console":
-            print("监听中（Ctrl+C 退出）…")
+            # console [名字] --seconds N
+            # 带上名字就先运行它再监听 —— 这是唯一能证明"小程序在真机上跑起来
+            # 不报错"的办法：OS 把 setup/loop/on_key 的异常打成日志通知发出来，
+            # 而 push --run 的连接太短，跑起来之后的错误根本收不到。
+            if args.path:
+                name = _safe_name(args.name or args.path)
+                await cli.send({"t": "run", "n": name})
+                print("  运行 %s: %s" % (name, await cli.wait(["run", "err"])))
+            if args.seconds:
+                print("监听 %d 秒…" % args.seconds)
+            else:
+                print("监听中（Ctrl+C 退出）…")
             n = 0
-            while True:
+            while not args.seconds or n < args.seconds:
                 await asyncio.sleep(1)
                 n += 1
                 if n % 10 == 0:          # 看门狗 BLE_IDLE_TIMEOUT_MS=25s，10 秒续一次命
@@ -372,6 +383,8 @@ async def run(args):
                         await cli.send({"t": "ping"})
                     except Exception:                         # noqa: BLE001
                         pass
+            if args.seconds:
+                print("  %d 秒内没有「出错」日志即视为正常" % args.seconds)
     finally:
         # 必须由设备端断开：Windows 在客户端 disconnect() 之后会抓着 BLE 链路，
         # 设备 60 秒都察觉不到，期间不广播 —— 下一次调用就会"找不到设备"。
@@ -408,6 +421,9 @@ def main():
     ap.add_argument("--run", action="store_true", help="push 完立即运行")
     ap.add_argument("--chunk", type=int, default=0,
                     help="push 的分片字节数；0 = 按协商 MTU 自动（便于实测对比）")
+    ap.add_argument("--seconds", type=int, default=0,
+                    help="console 监听多少秒后退出；0 = 一直挂着。"
+                         "配合位置参数可先运行某个小程序再监听")
     args = ap.parse_args()
 
     if args.action == "push":

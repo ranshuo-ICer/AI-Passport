@@ -35,6 +35,9 @@ class Ctx:
         self.lcd = shell.lcd
         self.battery = shell.battery
         self.audio = shell.audio
+        # 按键对象。给诊断类小程序用（读原始 ADC 毫伏，用于重标定
+        # config.BTN_WINDOWS）—— 官方 C 固件的 demo_button 就是干这个的。
+        self.buttons = shell.buttons
         self.w = shell.lcd.w
         self.h = shell.lcd.h
         self.name = name

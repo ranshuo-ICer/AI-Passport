@@ -15,7 +15,7 @@
 | `esp.py` | 电脑 | esptool 包装，自动适配 v4（下划线）/ v5（连字符）命令名 |
 | `serve.py` | 电脑 | 本地托管 PWA（`http://127.0.0.1:8790`） |
 | `serial_probe.py` | 电脑 | 读串口日志 / 触发复位，看原厂固件输出 |
-| `ble_client.py` | 电脑 | 命令行 BLE 客户端：scan / console / push / run / rm / time / repro |
+| `ble_client.py` | 电脑 | 命令行 BLE 客户端：scan / console / push / run / rm / time / repro。`console <名字> --seconds N` = **先运行该小程序再监听 N 秒日志**，这是唯一能证明"小程序在真机上跑起来不报错"的办法（`push --run` 的连接太短，跑起来之后的异常收不到）；`push --chunk N` 可手动指定分片字节数 |
 | `ble_scan_detail.py` | 电脑 | 扫描并打印广播详情（RSSI、服务 UUID、厂商数据） |
 | `ble_dump_gatt.py` | 电脑 | 连上后 dump 完整 GATT 服务/特征表 |
 | `ble_disconnect_test.py` | 电脑 | 复现"主机抓着 BLE 链路不放"的问题 |
@@ -125,7 +125,7 @@ python tools/esp.py --chip esp32c3 --baud 460800 write_flash -z 0x0 firmware/xxx
 
 ```sh
 python tools/test_audio.py         # 90 项：ES8311 寄存器/分频/音量/I2S 参数
-python tools/lint_micropython.py   # 扫 os/ + hw_selftest + 小程序，共 18 个设备端文件
+python tools/lint_micropython.py   # 扫 os/ + hw_selftest + 小程序，共 28 个设备端文件
 python tools/check_pwa.py          # 前端 JS 语法 + DOM id 一致性
 python tools/check_docs.py         # 文档↔代码一致性（改完文档/代码都该跑）
 python tools/repro_ping_corruption.py   # 复现 KNOWN_ISSUES #1（修复前红、修复后绿）

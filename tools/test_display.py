@@ -181,6 +181,31 @@ def main():
     check("drop_text_cache() 连纯色块一起放掉",
           not d._fill_cache and d._fill_bytes == 0)
 
+    # 块高不超过矩形本身：小矩形不该铺一整块 2 KB 的图案
+    d.spi.writes = []
+    d.fill_rect(0, 0, 12, 6, D.CYAN)
+    small = d._fill_cache.get((D.CYAN, 12))
+    check("小矩形只铺 h*w*2 字节（12x6 -> 144）",
+          small is not None and len(small) == 12 * 6 * 2,
+          "块长 %s" % (len(small) if small else None))
+    check("小矩形仍然一次写完整块", d.spi.writes == [12 * 6 * 2],
+          "writes=%s" % d.spi.writes)
+
+    # hline 的 h=1：块应当只有 w*2 字节
+    d.spi.writes = []
+    d.hline(0, 200, 100, D.MAGENTA)
+    line = d._fill_cache.get((D.MAGENTA, 100))
+    check("hline 的块只有 w*2 字节", line is not None and len(line) == 200,
+          "块长 %s" % (len(line) if line else None))
+
+    # 缓存条目小了，预算里能装下的宽度种类应当明显变多
+    d.drop_text_cache()
+    for w in range(4, 40, 2):
+        d.fill_rect(0, 0, w, 4, D.GREY)
+    check("预算内能装下 >= 8 种宽度（小条目）",
+          len(d._fill_cache) >= 8,
+          "装了 %d 种，占用 %d B" % (len(d._fill_cache), d._fill_bytes))
+
     d.spi.writes = []
     d.fill_rect(0, 0, 240, 322, D.GREEN)        # 322 > 320，必然走裁剪 + tail 分支
     check("带 tail 分支时总字节仍然精确",

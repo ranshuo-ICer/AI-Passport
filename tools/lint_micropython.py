@@ -72,11 +72,15 @@ def device_files():
             p = os.path.join(miniapps, fn)
             try:
                 with open(p, encoding="utf-8") as f:
-                    head = f.read(2000)
+                    text = f.read()
             except OSError:
                 continue
-            # 只收真正的小程序（带设备端钩子），把宿主脚本排除
-            if "def setup(ctx)" in head or "def loop(ctx)" in head:
+            # 只收真正的小程序（带设备端钩子），把宿主脚本排除。
+            # ⚠ 这里必须读**整个文件**：原来只读前 2000 字节，于是钩子定义在后面
+            #   的小程序全被漏掉 —— 实测 8 个里有 7 个没被扫到（beats / repeater /
+            #   metronome / memory / snake / timer / wave / pet …），
+            #   等于这个检查对最容易踩 MicroPython API 坑的那些文件形同虚设。
+            if "def setup(ctx)" in text or "def loop(ctx)" in text:
                 extra.append(p)
 
     for p in extra:
