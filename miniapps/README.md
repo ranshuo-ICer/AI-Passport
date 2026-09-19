@@ -3,7 +3,7 @@
 这是给 **PassportOS**（路线 B）用的小程序集合，加上两个开发工具。
 
 小程序就是 `/apps/<名字>/app.py` —— 一段普通 Python，通过手机 App 用蓝牙推送上去，
-设备菜单里就会出现它。运行时环境见 [`../docs/PROTOCOL.md`](../docs/PROTOCOL.md)。
+设备菜单里就会出现它。运行时环境见 [`../docs/ble-protocol.md`](../docs/ble-protocol.md)。
 
 ---
 
@@ -25,7 +25,7 @@
 I2S 交接（把播放实例 `deinit` 掉 → 用同一组 BCLK/WS 建 RX → 录完再重建播放）。
 这条路**在真机上验证过可以录音**，但录音长度受 RAM 限制（约 2 秒 @8kHz），
 且音质取决于 ES8311 的 ADC 通路是否被完整初始化。详见
-[`../docs/KNOWN_ISSUES.md`](../docs/KNOWN_ISSUES.md)。
+[`../docs/known-issues.md`](../docs/known-issues.md)。
 
 ---
 
@@ -38,7 +38,7 @@ I2S 交接（把播放实例 `deinit` 掉 → 用同一组 BCLK/WS 建 RX → �
 
 > ⚠ **推之前先断开再重连**，然后立刻推。原因：手机端每 10 秒发一次心跳，
 > 而上传超过 10 秒心跳会被写进 `app.py` 并截断文件 —— 见
-> [`../docs/KNOWN_ISSUES.md`](../docs/KNOWN_ISSUES.md) #1。重连后计时归零，
+> [`../docs/known-issues.md`](../docs/known-issues.md) #1。重连后计时归零，
 > 只要「连接 → 传完」在 10 秒内就安全。
 
 ### 方式二：打包成一个安装包
@@ -114,6 +114,6 @@ python3 _verify.py snake.py --ticks 900 --keys up,up,down,ok
 
 ## 5. 相关文档
 
-- [`../docs/PROTOCOL.md`](../docs/PROTOCOL.md) —— 小程序 API（`ctx` 全部成员、绘图接口）
-- [`../docs/KNOWN_ISSUES.md`](../docs/KNOWN_ISSUES.md) —— 已知缺陷，**推之前值得读一遍**
+- [`../docs/ble-protocol.md`](../docs/ble-protocol.md) —— 小程序 API（`ctx` 全部成员、绘图接口）
+- [`../docs/known-issues.md`](../docs/known-issues.md) —— 已知缺陷，**推之前值得读一遍**
 - [`../README.md`](../README.md) —— 项目总入口

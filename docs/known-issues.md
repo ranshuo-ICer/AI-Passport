@@ -90,7 +90,7 @@ if self.mtu and self.mtu > 23:    # ← 恰好排除了 MTU=23（未协商）这
 ```
 
 实测这个表达式：MTU=23 时算出 **180**，而 ATT 上限只有 **20**。
-代码注释与 `docs/PROTOCOL.md` 都写着「MTU 没协商出来时按最小可用值发，
+代码注释与 `docs/ble-protocol.md` 都写着「MTU 没协商出来时按最小可用值发，
 宁可多切几片」——**代码做的正好相反**。`_write_rsp` 遇到 OSError 只 `break`，
 消息永久丢失。MTU 正常协商到 247 时不触发。
 
@@ -168,7 +168,7 @@ class machine.I2S(id, *, sck, ws, sd, mck=None, mode, bits, format, rate, ibuf)
 ```
 
 `mck` 从 v1.24 起就有。原厂固件的自检日志也是 `mclk_multiple: 256`
-（`docs/FACTORY_FIRMWARE.md`），说明硬件上 MCLK 是通的。
+（`docs/factory-firmware.md`），说明硬件上 MCLK 是通的。
 
 所以这条结论**很可能是误诊**（真正的 TypeError 可能由别的非法参数引起）。
 功能上 BCLK 倍频能用、真机也出声了，但走外部 MCLK 是更正规的方案

@@ -1,7 +1,7 @@
 """BLE 小程序推送服务（GATT peripheral）。
 
 手机侧（Web Bluetooth / Android）通过这里把小程序源码传进来、列目录、删除、运行。
-协议细节见 docs/PROTOCOL.md。
+协议细节见 docs/ble-protocol.md。
 
 两个特征值：
     CMD (写)   —— 没有上传任务时，载荷是 UTF-8 的 JSON 命令；

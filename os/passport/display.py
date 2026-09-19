@@ -228,7 +228,7 @@ class Display:
 
     # ------------------------------------------------------------------ 文字
     # 用 MicroPython 固件自带 framebuf 的 8x8 点阵字体（只有 ASCII），
-    # 免去打包字库。中文需要用 bitmap 资源，见 docs/PROTOCOL.md。
+    # 免去打包字库。中文需要用 bitmap 资源，见 docs/ble-protocol.md。
     def _text_fb(self, width):
         fb = self._fb_cache.get(width)
         if fb is None:

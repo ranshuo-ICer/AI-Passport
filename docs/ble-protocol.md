@@ -40,7 +40,7 @@ MTU：设备启动时请求 247。手机侧必须容忍协商失败（退回 23�
 - 设备 → 手机：单包通知上限 = `min(180, MTU-3)`，超长自动分片（见下）。
 
 > ⚠ **已知缺陷**：MTU 未协商（保持默认 23）时，设备端仍按 180 字节发送，超过 ATT 上限
-> （20 字节）。详见 [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md) #3。
+> （20 字节）。详见 [`known-issues.md`](known-issues.md) #3。
 
 > **必须显式设置特征值缓冲长度。** MicroPython 的 GATT 特征值默认最大只有 20 字节
 > （= 默认 ATT MTU 23 − 3），超过这个长度的写入会被**静默截断** —— 表现为设备收到半截
@@ -218,7 +218,7 @@ def setup(ctx):
 > 1. `tone()` / `melody()` 是**阻塞**的，且在播放前会用纯 Python 逐样本生成波形。
 >    长音会同时冻结界面和 BLE 处理，**建议单次不超过 1 秒**。
 > 2. 缓冲区是按时长一次性分配的（16 kHz × 秒数 × 2 字节）。可用堆约 110 KB，
->    所以 `ms` 超过约 3000 会 `MemoryError`。详见 [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md) #10。
+>    所以 `ms` 超过约 3000 会 `MemoryError`。详见 [`known-issues.md`](known-issues.md) #10。
 >
 > 录音（麦克风）**未实现**：需要第二个 I2S 实例共享同一组时钟，MicroPython 的
 > `machine.I2S` 做不到。

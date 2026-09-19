@@ -12,7 +12,7 @@
     def on_key(ctx, key):      # key ∈ "up" / "down" / "ok"
     def teardown(ctx):         # 退出前调用一次
 
-ctx 提供（完整说明见 docs/PROTOCOL.md）：
+ctx 提供（完整说明见 docs/ble-protocol.md）：
     ctx.lcd / ctx.w / ctx.h / ctx.frame / ctx.name
     ctx.battery / ctx.audio（可能为 None，用前判空）/ ctx.shell
     ctx.log(m) / ctx.exit()

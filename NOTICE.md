@@ -55,7 +55,7 @@
 | 设备序列号 `sn` | `4c11aexxxxxx` |
 | 身份公钥指纹 `pk_fp` | `xxxxxxxx` |
 
-因此 `README.md` 与 `docs/FACTORY_FIRMWARE.md` 里的这些值**不具备可追溯性**，
+因此 `README.md` 与 `docs/factory-firmware.md` 里的这些值**不具备可追溯性**，
 仅用于说明数据结构与日志格式。其余敏感字段（`key`、个人 `name`）原本就已隐去。
 
 > ⚠ 仍然保留了 `backup/passport_original_8MB.bin` 的 **SHA-256**（见 `README.md`）。
