@@ -92,11 +92,13 @@ class Display:
         self.h = C.LCD_H
         self._fb_cache = {}
 
+        # SPI mode 由 config 的 LCD_SPI_MODE 推导：bit0=polarity, bit1=phase。
+        # 本屏是 mode 0（SCK 空闲低、上升沿采样）。
         self.spi = SPI(
             C.LCD_SPI_ID,
             baudrate=C.LCD_BAUD,
-            polarity=0,
-            phase=0,
+            polarity=C.LCD_SPI_MODE & 1,
+            phase=(C.LCD_SPI_MODE >> 1) & 1,
             sck=Pin(C.LCD_SCLK),
             mosi=Pin(C.LCD_MOSI),
         )

@@ -21,6 +21,7 @@ esptool v5 把子命令和参数从下划线改成了连字符：
 """
 
 import os
+import re
 import subprocess
 import sys
 
@@ -56,24 +57,47 @@ V5_VALUES = {
     "default_reset": "default-reset",
     "usb_reset": "usb-reset",
     "no_reset_no_sync": "no-reset-no-sync",
+    "watchdog_reset": "watchdog-reset",     # v4.9+ 也支持这个取值
 }
+
+
+def _major_from_text(text):
+    """从任意版本横幅里抠出主版本号。
+
+    要能同时吃下这几种：
+        esptool.py v4.7.0          （v4 的横幅，token 以 'v' 开头）
+        esptool v5.4.0             （v5 的横幅）
+        4.7.0
+    之前只认"首字符是数字"的 token，于是 v4 的 `esptool.py v4.7.0` 匹配不上，
+    被误判成 v5，全部命令名都翻成连字符形式，在 v4 下必然失败。
+    现在是先按正则找 `v?数字.数字`，跨整段文本搜索。
+    """
+    m = re.search(r"\bv?(\d+)\.\d+", text or "")
+    if m:
+        try:
+            return int(m.group(1))
+        except ValueError:
+            pass
+    return None
 
 
 def detect_major():
     """返回 esptool 主版本号；探测不到就假定 5。"""
     try:
         import importlib.metadata as md
-        return int(md.version("esptool").split(".")[0])
+        v = _major_from_text(md.version("esptool"))
+        if v is not None:
+            return v
     except Exception:
         pass
     try:
-        out = subprocess.run(
+        proc = subprocess.run(
             [sys.executable, "-m", "esptool", "version"],
             capture_output=True, text=True, timeout=30,
-        ).stdout
-        for tok in out.replace("\n", " ").split():
-            if tok[:1].isdigit() and "." in tok:
-                return int(tok.split(".")[0])
+        )
+        v = _major_from_text((proc.stdout or "") + " " + (proc.stderr or ""))
+        if v is not None:
+            return v
     except Exception:
         pass
     return 5

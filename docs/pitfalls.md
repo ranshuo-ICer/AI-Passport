@@ -67,19 +67,37 @@ MicroPython 可用堆只有 100~150 KB。
 
 > **这类坑是本文里最危险的一种**：测试环境比目标环境"更强大"，于是假绿灯。
 
-### 2.2 `machine.I2S` 的 `mck` 参数（存疑）
+### 2.2 `machine.I2S` 的 `mck` 参数（已定论：ESP32 端口不支持）
 
 **现象**：传 `mck=Pin(6)` 报 `TypeError: extra keyword arguments given`。
 
-**根因**：**这条结论很可能是误诊。** MicroPython v1.29.0 的官方文档明确写着
-`machine.I2S(id, *, sck, ws, sd, mck=None, mode, bits, format, rate, ibuf)`，
-`mck` 从 v1.24 起就存在；原厂固件的自检日志也是 `mclk_multiple: 256`。
+**根因**：**官方文档与 ESP32 端口的实现不一致。**
 
-**怎么办**：目前的规避方式是走 ES8311 的 **BCLK 倍频**（`use_mclk=False`），
-功能可用、真机出声。但走外部 MCLK 是更正规的方案（时钟更准），
-**建议在真机上重测一次**。详见 [`known-issues.md`](known-issues.md) #11。
+- 文档（v1.29.0）写的是通用签名
+  `machine.I2S(id, *, sck, ws, sd, mck=None, mode, bits, format, rate, ibuf)`，
+  里面确实有 `mck`；
+- 但 **ESP32 端口的实现里根本没有这个参数** ——
+  `ports/esp32/machine_i2s.c`（tag `v1.29.0`）全文**没有出现过 `mck`**。
 
-> **教训**：把一次 `TypeError` 直接归因成"API 不支持"之前，先查当前版本的文档。
+真机复测（2026-09-19，MicroPython v1.29.0 on ESP32-C3）把四种写法都试了：
+
+| 写法 | 结果 |
+| --- | --- |
+| `mck=Pin(6)` | `TypeError: extra keyword arguments given` |
+| `mck=6`（整数） | 同上 |
+| **`mck=None`** | **同上** |
+| 其余参数（sck/ws/sd/mode/bits/format/rate/ibuf） | 全部接受 |
+
+`mck=None` 也被拒是决定性证据：如果它是被识别的关键字，传文档默认值不该报错。
+所以这不是"参数值不对"，而是**该端口没有解析这个名字**。
+
+**怎么办**：走 ES8311 的 **BCLK 倍频**（`use_mclk=False`，官方驱动里本就有的分支），
+本项目的音频就是这么做的，真机出声正常。想在 GPIO6 上出 MCLK 只能用 ESP-IDF。
+
+> **教训**：MicroPython 的文档是按"通用 API"写的，**具体端口可以少实现参数**。
+> 遇到 `extra keyword arguments given` 时，除了查文档，也要查
+> `ports/<端口>/` 下的对应 C 源码 —— 以真机行为为准。
+> （本条曾一度被记为"可能是误诊"，后经源码 + `mck=None` 两项证据确认为真。）
 
 ### 2.3 想录音，但 I2S 被系统占着
 

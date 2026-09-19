@@ -46,13 +46,16 @@ class FakeI2S:
         self.idx = idx
         self.kw = kw
         self.written = 0
+        self.buffers = []          # 留下每次 write 的字节，供断言检查
         FakeI2S.instances.append(self)
 
     def write(self, buf):
-        # microptyhon 的 I2S.write 按【字节】计数；array('h') 的 len 是元素数，
+        # MicroPython 的 I2S.write 按【字节】计数；array('h') 的 len 是元素数，
         # 所以这里必须用 memoryview 的 nbytes，不能直接用 len()。
-        self.written += memoryview(buf).nbytes
-        return memoryview(buf).nbytes
+        mv = memoryview(buf)
+        self.buffers.append(bytes(mv))
+        self.written += mv.nbytes
+        return mv.nbytes
 
     def deinit(self):
         pass
@@ -150,17 +153,14 @@ def main():
     # 单调性：音量越大寄存器值越大
     fake.regs.clear()
     prev = -1
-    mono = True
+    bad = None
     for pct in range(0, 101, 5):
         a.set_volume(pct)
         v = fake.regs[0x32]
-        if v < prev:
-            mono = False
-            check("音量单调递增", False, "%d%% -> 0x%02X < 0x%02X" % (pct, v, prev))
-            break
+        if v < prev and bad is None:
+            bad = "%d%% -> 0x%02X < 0x%02X" % (pct, v, prev)
         prev = v
-    if mono:
-        check("音量单调递增 (0~100 全程)", True)
+    check("音量单调递增 (0~100 全程)", bad is None, bad or "")
 
     print("\n[5] I2S 参数")
     i2s = FakeI2S.instances[-1]
@@ -175,11 +175,36 @@ def main():
     check("DOUT 接在 GPIO2", getattr(i2s.kw.get("sd"), "n", None) == C.I2S_DOUT)
 
     print("\n[6] 播放路径真的写出了数据")
+    i2s.buffers.clear()
     before = i2s.written
     a.tone(1000, 100)
     n = i2s.written - before
     check("100ms@16kHz 写出 3200 字节", n == 16000 * 100 // 1000 * 2, "实际 %d" % n)
-    check("缓冲是 16bit", True)
+
+    # 真检查（不是 check(..., True)）：样本必须是 16bit 小端有符号、
+    # 有实际幅度、且没削顶。
+    raw = b"".join(i2s.buffers)
+    check("字节数为偶数（16bit）", len(raw) % 2 == 0, "len=%d" % len(raw))
+    if raw:
+        import array as _array
+        smp = _array.array("h")
+        smp.frombytes(raw)
+        peak = max(max(smp), -min(smp))
+        check("非静音段有实际幅度", peak > 1000, "peak=%d" % peak)
+        check("没有削顶 (|样本| < 32767)", peak < 32767, "peak=%d" % peak)
+
+    print("\n[6b] 长音分块（防 MemoryError）")
+    i2s.buffers.clear()
+    before = i2s.written
+    a.tone(440, 5000)                  # 5 秒：不分块需 160KB，必 MemoryError
+    total = i2s.written - before
+    cap = a.MAX_TONE_MS
+    check("超长音被截断到 MAX_TONE_MS(%d)" % cap,
+          total == 16000 * cap // 1000 * 2, "实际 %d" % total)
+    biggest = max(len(b) for b in i2s.buffers) if i2s.buffers else 0
+    check("单块不超过 CHUNK_SAMPLES*2",
+          biggest <= a.CHUNK_SAMPLES * 2, "最大 %d" % biggest)
+    check("确实切成了多块", len(i2s.buffers) > 1, "%d 块" % len(i2s.buffers))
 
     before = i2s.written
     a.tone(0, 50)                      # 静音也要占时长

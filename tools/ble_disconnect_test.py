@@ -91,11 +91,24 @@ finally:
     print("\n" + "=" * 60)
     disc = [t for t, ln in lines if "已断开" in ln]
     adv = [t for t, ln in lines if "广播已启动" in ln]
-    if disc:
-        print("设备察觉断开用了 %.1f 秒" % (disc[0] - T0))
+    idle = [t for t, ln in lines if "空闲超过" in ln]
+
+    # ⚠ 设备端现在有 25 秒空闲看门狗（BLE_IDLE_TIMEOUT_MS）。所以"设备多久察觉
+    #   断开"这个数字只有在看门狗触发【之前】出现才有意义；否则测到的是看门狗
+    #   的兜底时间，不是链路本身的断开检测。以前这个脚本会把两种结论混着打印，
+    #   自相矛盾，这里显式区分。
+    if idle and disc and disc[0] > idle[0]:
+        print("结论：客户端 disconnect() 之后设备【没有】收到断开事件。")
+        print("      设备是在 %.1f 秒被自己的空闲看门狗救回来的（看门狗 %.1f 秒触发）。"
+              % (disc[0] - T0, idle[0] - T0))
+        print("      => 印证：Windows 会抓着 BLE 链路，必须由设备端主动断开")
+        print("         （客户端收尾时发 {\"t\":\"bye\"}）。")
+    elif disc:
+        print("结论：设备在 %.1f 秒察觉断开（早于看门狗），链路断开事件正常。"
+              % (disc[0] - T0))
     else:
-        print("设备在 100 秒内【始终没有】察觉断开")
-        print("=> 是主机（Windows）抓着 BLE 链路不放，不是设备的问题")
+        print("结论：设备在 100 秒内【始终没有】察觉断开，看门狗也没在窗口内触发")
+        print("      （看门狗默认 25 秒，出现这种情况请检查设备固件是否是最新的）。")
     if adv:
         print("恢复广播于 %.1f 秒" % (adv[-1] - T0))
     print("=" * 60)

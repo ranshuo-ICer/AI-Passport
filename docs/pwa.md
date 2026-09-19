@@ -59,7 +59,7 @@ manifest.webmanifest → PWA 清单（standalone 模式）
 
 ## 3. `sw.js` Service Worker
 
-- 缓存名 `passport-pwa-v6`（**改动 pwa/ 下任何资源后必须递增这个版本号**，否则浏览器会一直用旧缓存）
+- 缓存名 `passport-pwa-v7`（**改动 pwa/ 下任何资源后必须递增这个版本号**，否则浏览器会一直用旧缓存）
 - 缓存资源：index.html / style.css / app.js / manifest / icons
 - 策略：缓存优先，后台更新；断网时返回缓存
 

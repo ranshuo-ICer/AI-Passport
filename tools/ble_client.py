@@ -37,6 +37,10 @@ RSP = "7a5c0003-0000-4000-8000-70617373706f"
 
 DEVICE_NAME = "PassportOS"
 
+# 与设备端 apps.valid_name() 保持一致：a-z0-9_- 且 ≤16 字符
+_NAME_OK = set("abcdefghijklmnopqrstuvwxyz0123456789_-")
+_NAME_RE = __import__("re").compile(r"^[a-z0-9_-]{1,16}$")
+
 
 # --------------------------------------------------------------------- 连接
 async def find_device(timeout=12.0):
@@ -203,16 +207,34 @@ async def cmd_push(cli, path, name, title, run_after):
         if m.get("t") == "err":
             print("  [X] %s" % m.get("m"))
             return False
-        off += len(piece)
+        # 以设备回的【权威计数】g 为准推进，而不是自己加 len(piece)。
+        # 否则设备只存了一半、或者 ack 是上一轮残留的，客户端照样打印 ✓。
+        got = m.get("g")
         if m.get("t") == "done":
-            print("  ✓ 完成 %d 字节" % m.get("s", 0))
+            got = m.get("s", got)
+        if not isinstance(got, int) or got <= off:
+            print("  [X] 设备计数没有前进（off=%s, g=%r），中止" % (off, got))
+            return False
+        off = got
+        if m.get("t") == "done":
+            if off != len(data):
+                print("  [X] 设备声称完成 %d 字节，但我们发了 %d 字节"
+                      % (off, len(data)))
+                return False
+            print("  ✓ 完成 %d 字节（设备计数一致）" % off)
             if run_after:
                 await cli.send({"t": "run", "n": name})
                 print("  %s" % await cli.wait(["run", "err"]))
             return True
     await cli.send({"t": "end"})
     m = await cli.wait(["done", "err"])
-    print("  ✓ %s" % m)
+    if m.get("t") == "err":
+        print("  [X] %s" % m.get("m"))
+        return False
+    if m.get("s") != len(data):
+        print("  [X] 完成计数 %r 与源码长度 %d 不符" % (m.get("s"), len(data)))
+        return False
+    print("  ✓ 完成 %d 字节" % len(data))
     if run_after:
         await cli.send({"t": "run", "n": name})
         print("  %s" % await cli.wait(["run", "err"]))
@@ -300,7 +322,7 @@ async def run(args):
             while True:
                 await asyncio.sleep(1)
                 n += 1
-                if n % 25 == 0:          # 设备端 90 秒空闲会踢人，定期续命
+                if n % 10 == 0:          # 看门狗 BLE_IDLE_TIMEOUT_MS=25s，10 秒续一次命
                     try:
                         await cli.send({"t": "ping"})
                     except Exception:                         # noqa: BLE001
@@ -345,10 +367,18 @@ def main():
         if not args.path or not os.path.isfile(args.path):
             print("push 需要指定一个存在的文件")
             return 1
+        # 应用名规则和设备端 apps.valid_name() 一致：只允许 a-z0-9_-，≤16 字符。
+        # 注意不能用 str.isalnum()：它对中文也为真，`push 时钟.py` 会得到非法名。
+        def _safe(s):
+            s = "".join(ch for ch in s.lower() if ch in _NAME_OK)
+            return s[:16] or "app"
         if not args.name:
-            args.name = os.path.splitext(os.path.basename(args.path))[0].lower()
-            args.name = "".join(ch for ch in args.name
-                                if ch.isalnum() or ch in "_-")[:16] or "app"
+            args.name = _safe(os.path.splitext(os.path.basename(args.path))[0])
+        else:
+            args.name = _safe(args.name)
+        if not _NAME_RE.match(args.name):
+            print("应用名 %r 不合法（只允许 a-z0-9_-，≤16 字符）" % args.name)
+            return 1
         if not args.title:
             args.title = args.name
 

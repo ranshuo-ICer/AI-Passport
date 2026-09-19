@@ -49,15 +49,23 @@ I2C_FREQ = 400_000
 ADDR_ES8311 = 0x18      # 7 位地址
 ADDR_CW2017 = 0x63
 
-# CW2017 寄存器
+# CW2017 寄存器（battery.py 从这里取，不再自己重复定义一份）
 CW_REG_VERSION = 0x00
 CW_REG_VCELL_H = 0x02   # 14bit，V(uV) = raw * 312.5
 CW_REG_SOC_H = 0x04     # 高字节 = 整数百分比
+CW_REG_CONFIG = 0x08
+CW_REG_SOC_ALERT = 0x0B
+CW_REG_PROFILE = 0x10
+CW_CONFIG_ACTIVE = 0x00
+CW_UPDATE_FLAG = 0x80
 
 # ===========================================================================
 # 音频：ES8311，I2S 播放已实现（录音未实现）
 # 接口与用法见 docs/ble-protocol.md 的「ctx.audio 音频接口」
 # ===========================================================================
+# ⚠ I2S_MCLK 目前【不被驱动】：MicroPython 的 ESP32 端口没实现 machine.I2S 的
+#   mck 参数（见 docs/pitfalls.md 2.2），所以音频走 ES8311 的 BCLK 倍频方案。
+#   这个常量保留是因为它是硬件事实（GPIO6 确实接着 MCLK），换到 ESP-IDF 时要用。
 I2S_MCLK = 6
 I2S_BCLK = 5
 I2S_WS = 3

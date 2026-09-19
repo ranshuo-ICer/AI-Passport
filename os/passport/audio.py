@@ -335,17 +335,51 @@ class Audio:
     def _pcm(self, samples):
         return array.array("h", samples)
 
+    # tone() 的单次时长上限与分块粒度。
+    # 不分块的话缓冲是"按时长一次性分配"：16kHz × 5000ms × 2B = 160KB，
+    # 而这块板可用堆只有约 110KB → 直接 MemoryError；而且整段纯 Python
+    # 合成期间界面冻结、BLE 写入排队（队列满了会静默丢弃）。
+    MAX_TONE_MS = 1000
+    CHUNK_SAMPLES = 640          # 40ms @16kHz = 1280 字节，对堆毫无压力
+
     def tone(self, freq, ms=200):
-        """播放一个纯音。freq=0 表示静音（用于构成节奏）。"""
+        """播放一个纯音。freq=0 表示静音（用于构成节奏）。
+
+        分块合成 + 分块写 I2S：缓冲不再随时长线性增长，`tone(440, 5000)`
+        也不会 MemoryError；块与块之间还会让出时间片，界面和 BLE 不至于僵死。
+        超过 MAX_TONE_MS 的时长会被截断。
+        """
         if not self.ok or ms <= 0:
             return
-        n = self.rate * ms // 1000
-        buf = array.array("h", bytes(n * 2))
-        if freq > 0:
-            step = (freq << _TABLE_BITS) * 256 // self.rate
-            self._phase = self._synth(buf, n, step, self._phase,
-                                      min(64, n // 4))
-        self._i2s.write(buf)
+        if ms > self.MAX_TONE_MS:
+            ms = self.MAX_TONE_MS
+        total = self.rate * ms // 1000
+        if total <= 0:
+            return
+
+        step = ((freq << _TABLE_BITS) * 256 // self.rate) if freq > 0 else 0
+        fade = min(64, total // 4)
+        done = 0
+        while done < total:
+            n = self.CHUNK_SAMPLES
+            if n > total - done:
+                n = total - done
+            buf = array.array("h", bytes(n * 2))
+            if freq > 0:
+                self._phase = self._synth(buf, n, step, self._phase, 0)
+                # 淡入淡出只作用在【整段】的头尾，不能每块都做，
+                # 否则块边界会出现一串突兀的音量台阶。
+                if done == 0:
+                    k = fade if fade < n else n
+                    for i in range(k):
+                        buf[i] = buf[i] * i // k
+                if done + n >= total:
+                    k = fade if fade < n else n
+                    for i in range(k):
+                        j = n - 1 - i
+                        buf[j] = buf[j] * i // k
+            self._i2s.write(buf)
+            done += n
 
     def _synth(self, buf, n, step, ph, fade):
         """把 n 个样本填进 buf 并返回新相位。

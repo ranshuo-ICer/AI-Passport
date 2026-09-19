@@ -1,0 +1,30 @@
+# 行尾统一策略。
+#
+# 为什么必须显式规定：Windows 上 git 默认 core.autocrlf=true，会把仓库里
+# 的 LF 检出成 CRLF。对本项目这有两个真实危害：
+#   1. os/ 和 miniapps/ 下的 .py 是直接推到 ESP32 上跑的，带 \r 进去既浪费
+#      Flash 又会让按字节解析的工具误判；
+#   2. tools/check_docs.py 之类按原始字节读文件的检查脚本会把行尾的 \r
+#      当成内容（曾因此把 `TITLE = "Memory"` 解析成 `Memory"\r` 而误报）。
+#
+# 所以：仓库里一律 LF；只有 Windows 批处理保留 CRLF
+# （LF 的 .bat 在 cmd.exe 下 goto/多行块会出问题）。
+
+* text=auto eol=lf
+
+# Windows 批处理
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 二进制，别碰
+*.bin binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.zip binary
+*.gz binary
+*.7z binary
+*.elf binary
+*.pyc binary

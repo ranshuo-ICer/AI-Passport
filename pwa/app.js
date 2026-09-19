@@ -23,6 +23,7 @@ const inbox = [];              // 早到的消息先存这里
 let frag = '';                 // 通知分片累积
 let waking = false;            // 正在重连广播
 let heartbeat = null;          // 心跳定时器
+let pushing = false;           // 上传中：锁住其它命令按钮、停心跳
 
 // 设备端有"连接空闲 25 秒就自动断开恢复广播"的看门狗。
 // 我们每 10 秒 ping 一次续命：正常会话不会被误杀，
@@ -120,6 +121,17 @@ async function sendCmd(obj) {
 }
 
 /* ------------------------------------------------------------------ 连接 */
+/* 连接失败回滚。
+ * GATT 可能其实已经连上了，只是握手/拉列表失败 —— 必须主动断开并清干净，
+ * 否则界面卡在"已连接"、按钮可用、心跳还在打，点「断开」也无效。 */
+function rollbackConnect() {
+  try {
+    if (device && device.gatt && device.gatt.connected) device.gatt.disconnect();
+  } catch (_) { /* 忽略 */ }
+  teardownConnection('未连接', true);
+  device = null;
+}
+
 /* 找回【之前已经授权过】的设备。
  * 走这条路完全不需要扫描选择器，也就不受"选择器里看不到设备"的影响。
  * navigator.bluetooth.getDevices() 在 Chrome/Edge 85+ 可用。 */
@@ -152,14 +164,13 @@ async function connect(forceChooser) {
       try {
         log('尝试直连已授权设备: ' + (known.name || known.id));
         device = known;
-        device.addEventListener('gattserverdisconnected', onDisconnected);
+        attachDisconnectListener(device);
         await openGatt();
         waking = true;
         return;
       } catch (e) {
         log('直连失败（设备可能不在广播）: ' + e.message, 'err');
-        try { device.removeEventListener('gattserverdisconnected', onDisconnected); } catch (_) {}
-        device = null;
+        rollbackConnect();
       }
     }
   }
@@ -176,10 +187,11 @@ async function connect(forceChooser) {
       ],
       optionalServices: [UUID_SERVICE],
     });
-    device.addEventListener('gattserverdisconnected', onDisconnected);
+    attachDisconnectListener(device);
     await openGatt();
     waking = true;
   } catch (e) {
+    rollbackConnect();
     log('连接失败: ' + (e.name || '') + ' ' + e.message, 'err');
     if (e.name === 'NotFoundError') {
       toast('没找到设备。确认设备开机、屏幕显示 Passport 菜单，且没被别人连着', 5000);
@@ -203,6 +215,14 @@ async function openGatt() {
   await rspChar.startNotifications();
   rspChar.addEventListener('characteristicvaluechanged', onNotify);
 
+  // ★ 先握手，成功了才认为"已连接"。
+  //   之前 connected=true / startHeartbeat() 放在握手之前，握手一抛错就留下
+  //   "界面显示已连接、按钮可用、心跳还在打、但 device 已被置空"的僵死状态，
+  //   点「断开」也没用（device.gatt 抛 TypeError 被吞），只能刷新页面。
+  const p = awaitMsg(['hi', 'err'], 6000);
+  await sendCmd({ t: 'hello' });
+  const hi = await p;
+
   connected = true;
   setUi(true);
   startHeartbeat();
@@ -211,11 +231,6 @@ async function openGatt() {
   $('devName').classList.add('on');
   log('已连接: ' + name, 'sys');
 
-  const hi = await (async () => {
-    const p = awaitMsg(['hi', 'err'], 6000);
-    await sendCmd({ t: 'hello' });
-    return p;
-  })();
   if (hi.t === 'hi') {
     log(`设备: ${hi.os}  已装 ${hi.apps} 个  可用 ${fmtBytes(hi.free)}  MTU=${hi.mtu}`, 'sys');
     $('statApps').textContent = hi.apps;
@@ -225,28 +240,63 @@ async function openGatt() {
 }
 
 async function tryReconnect() {
-  if (connected || !device || !device.gatt) return;
+  if (connected || !device || !device.gatt || !waking) return;
   try {
     await openGatt();
-  } catch (e) { /* 静默，等用户手动点 */ }
+  } catch (e) {
+    log('自动重连失败: ' + e.message, 'err');
+  }
 }
 
-function onDisconnected() {
+/* 统一的拆连接出口。
+ * 正常断开、握手失败、用户主动断开都走这里，保证 UI / 定时器 / 会话缓冲
+ * 不会留下半截状态。
+ *
+ * 必须清 inbox/frag/waiter：否则上一会话残留的 ack/done 会被下一轮推送
+ * 当作第一个回应（流控静默错位），残留的 ls/err 会让新请求拿到旧结果，
+ * 残留的 '~' 分片会被拼到新会话第一帧前面导致 JSON 解析失败。 */
+function teardownConnection(label, quiet) {
   connected = false;
   stopHeartbeat();
   cmdChar = rspChar = server = null;
+  inbox.length = 0;
+  frag = '';
+  if (waiter) {
+    clearTimeout(waiter.timer);
+    const w = waiter;
+    waiter = null;
+    try { w.reject(new Error(label || '连接已结束')); } catch (_) {}
+  }
   setUi(false);
-  $('devName').textContent = '已断开';
+  $('devName').textContent = label || '已断开';
   $('devName').classList.remove('on');
   $('statRun').textContent = '–';
+  if (!quiet) log('连接已结束: ' + (label || ''), 'sys');
+}
+
+function onDisconnected() {
+  const was = connected;
+  teardownConnection('已断开', true);
   log('设备已断开', 'err');
-  toast('设备已断开');
+  if (was) toast('设备已断开');
+}
+
+/* gattserverdisconnected 每次重连都注册会累积（getDevices() 返回的是同一个
+ * BluetoothDevice 对象），断开时会触发 N+1 次。所以按设备打标记只挂一次。 */
+function attachDisconnectListener(dev) {
+  if (dev.__ppHooked) return;
+  dev.__ppHooked = true;
+  dev.addEventListener('gattserverdisconnected', onDisconnected);
 }
 
 function setUi(on) {
+  // 上传期间只留「断开」可用，其余命令一律锁死：
+  // awaitMsg 只有一个等待槽，中途插入别的命令会把推送的 ack 等待顶掉。
+  const lock = on && !pushing;
   for (const id of ['btnRefresh', 'btnSyncTime', 'btnStop', 'btnPush', 'btnPushRun'])
-    $(id).disabled = !on;
+    $(id).disabled = !lock;
   $('btnConnect').textContent = on ? '断开' : '连接';
+  $('btnPick').disabled = pushing;
 }
 
 /* ------------------------------------------------------------------ 操作 */
@@ -301,11 +351,19 @@ async function runApp(name) {
 
 async function removeApp(name) {
   if (!confirm(`确定从设备删除 ${name} ？`)) return;
-  const p = awaitMsg(['rm', 'err']);
-  await sendCmd({ t: 'rm', n: name });
-  const r = await p;
-  log(r.ok ? `已删除 ${name}` : `删除 ${name} 失败`, r.ok ? 'sys' : 'err');
-  await refreshApps();
+  try {
+    const p = awaitMsg(['rm', 'err']);
+    await sendCmd({ t: 'rm', n: name });
+    const r = await p;
+    log(r.ok ? `已删除 ${name}` : `删除 ${name} 失败`, r.ok ? 'sys' : 'err');
+    if (!r.ok) toast(`删除 ${name} 失败`);
+    await refreshApps();
+  } catch (e) {
+    // 以前这里没有 catch：失败只会在控制台留一条 unhandled rejection，
+    // 界面上什么都看不到。
+    log('删除失败: ' + e.message, 'err');
+    toast('删除失败: ' + e.message);
+  }
 }
 
 async function syncTime() {
@@ -342,6 +400,17 @@ async function pushApp(name, title, source, alsoRun) {
 
   const btns = [$('btnPush'), $('btnPushRun')];
   btns.forEach(b => b.disabled = true);
+
+  // 上传期间必须停心跳：设备在数据模式下收到的每个字节都直接写进 app.py，
+  // 而心跳 {"t":"ping"} 是 12 字节 —— 会被当成源码写进文件，并让设备
+  // 提前 12 字节认为收满，结果是**静默损坏且照常报成功**。
+  // 设备端也已把 ping 加进控制命令白名单（双层防御），但客户端不该依赖它。
+  // 顺带把所有命令按钮锁死：awaitMsg 只有一个等待槽，中途点别的按钮会把
+  // 推送的 ack 等待顶掉 → 走 catch → 发 abort → 设备删掉半截应用。
+  pushing = true;
+  stopHeartbeat();
+  setUi(connected);
+
   try {
     log(`开始推送 ${name}（${bytes.length} 字节）…`, 'sys');
 
@@ -368,10 +437,18 @@ async function pushApp(name, title, source, alsoRun) {
           slice = bytes.slice(off, off + chunk);
         }
       }
+      // 重试 5 次仍没写出去时，以前会继续 awaitMsg 白等 10 秒才超时
+      if (!wrote) throw new Error('BLE 写入连续失败，已放弃');
 
       const a = await awaitMsg(['ack', 'done', 'err'], 10000);
       if (a.t === 'err') throw new Error(a.m);
-      off += slice.length;
+      // 以设备回的权威计数为准，避免"少存了却算作成功"
+      const got = (typeof a.g === 'number') ? a.g : off + slice.length;
+      if (got <= off && a.t !== 'done') {
+        log('设备计数没有前进，中止', 'err');
+        throw new Error('设备计数停滞');
+      }
+      off = got;
       if (a.t === 'done') { finished = true; break; }
       if (off % 1024 < chunk) log(`  ${off}/${bytes.length} 字节`, 'sys');
     }
@@ -380,7 +457,19 @@ async function pushApp(name, title, source, alsoRun) {
       p = awaitMsg(['done', 'err'], 8000);
       await sendCmd({ t: 'end' });
       r = await p;
-      if (r.t === 'err') throw new Error(r.m);
+      if (r.t === 'err') {
+        // 设备回"没有正在进行的上传"说明它其实早已收满（done 被别的
+        // 等待槽吃掉了），这时报失败是错的。
+        if (String(r.m || '').indexOf('没有正在进行') >= 0) {
+          log('设备已收满（end 多余），按成功处理', 'sys');
+        } else {
+          throw new Error(r.m);
+        }
+      }
+    }
+
+    if (finished && off !== bytes.length) {
+      log(`警告：设备计数 ${off} 与源码长度 ${bytes.length} 不一致`, 'err');
     }
 
     log(`推送完成: ${name}`, 'sys');
@@ -392,7 +481,9 @@ async function pushApp(name, title, source, alsoRun) {
     toast('推送失败: ' + e.message, 3500);
     try { await sendCmd({ t: 'abort' }); } catch (_) { /* 忽略 */ }
   } finally {
-    btns.forEach(b => b.disabled = !connected);
+    pushing = false;
+    setUi(connected);
+    if (connected) startHeartbeat();
   }
 }
 
@@ -835,15 +926,24 @@ function loadLocal() {
 function bind() {
   $('btnConnect').onclick = async () => {
     if (connected) {
+      // 用户主动断开 → 关掉自动重连，否则切走再切回来会"悄悄又连上"。
+      waking = false;
       // 先说再见，让【设备端】主动断开。Windows 在客户端 disconnect() 之后
-      // 会抓着 BLE 链路，设备 60 秒都察觉不到、期间不广播，下一次就连不上。
+      // 会抓着 BLE 链路，设备侧一分钟都察觉不到、期间不广播，下一次就连不上。
       try { await sendCmd({ t: 'bye' }); } catch (_) {}
       await new Promise(r => setTimeout(r, 350));
       try { device.gatt.disconnect(); } catch (_) {}
+      teardownConnection('已断开', true);
     } else await connect(false);
   };
   $('btnPick').onclick = async () => {
-    if (connected) { try { device.gatt.disconnect(); } catch (_) {} }
+    waking = false;
+    if (connected) {
+      try { await sendCmd({ t: 'bye' }); } catch (_) {}
+      await new Promise(r => setTimeout(r, 350));
+      try { device.gatt.disconnect(); } catch (_) {}
+      teardownConnection('已断开', true);
+    }
     log('强制重新打开设备选择器 …');
     await connect(true);
   };
@@ -915,10 +1015,10 @@ function bind() {
   });
 }
 
+/* 推送内容的唯一来源就是编辑器。
+ * 选文件时 onchange 已经把内容灌进 editor 了，所以这里不需要分支
+ * （以前那个 if 块里只有注释，等于死代码）。 */
 function currentSource() {
-  if ($('pushSource').value === 'file' && $('pushFile').files[0]) {
-    // 文件已经在 onchange 里灌进 editor 了，这里仍以 editor 为准
-  }
   return $('editor').value;
 }
 

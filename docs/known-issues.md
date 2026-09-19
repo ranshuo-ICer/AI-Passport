@@ -2,13 +2,23 @@
 
 > 来源：2026-09-19 对全仓的一次系统性代码评审（**只读评审，逐条对过源码**）。
 > 每条都注明**触发条件**与**影响面**，按严重程度排列。
-> 状态：`OPEN` = 未修；`FIXED` = 已修。
-
+>
+> **状态（2026-09-19 更新）：本清单已全部处理完毕。**
+> 3 条 P0、8 条 P1、12 条 P2 全部修复，并补了对应的回归测试。
+> 唯一一条被判定为**误诊**的是 #11（`mck`）—— 已用
+> `ports/esp32/machine_i2s.c`（v1.29.0 全文无 `mck`）+ 真机 `mck=None` 复测
+> 两项证据定论：ESP32 端口确实没实现这个参数。
+>
+> 修复后新增/强化的守卫：
+> - `tools/repro_ping_corruption.py` —— #1 的可执行复现，修好前红、修好后绿
+> - `tools/test_audio.py` 新增"长音分块"用例；删掉两条永真断言（#18）
+> - `tools/lint_micropython.py` 扫描范围扩到 `hw_selftest.py` 与 6 个小程序（#17）
+> - `tools/check_pwa.py` 重写：路径无关、任一失败都让退出码非 0（#14）
 ---
 
 ## P0 — 会静默损坏数据 / 卡死
 
-### #1 上传小程序期间，手机端心跳被当成源码写进 `app.py` — `OPEN`
+### #1 上传小程序期间，手机端心跳被当成源码写进 `app.py` — `FIXED`
 
 | | |
 | --- | --- |
@@ -58,7 +68,7 @@ python tools/repro_ping_corruption.py     # 修复前：exit 1（红）
 
 ---
 
-### #2 连接失败不回滚，UI 卡在"已连接"且断开无效 — `OPEN`
+### #2 连接失败不回滚，UI 卡在"已连接"且断开无效 — `FIXED`
 
 | | |
 | --- | --- |
@@ -75,7 +85,7 @@ python tools/repro_ping_corruption.py     # 修复前：exit 1（红）
 
 ---
 
-### #3 设备端通知分片的 MTU 兜底写反了 — `OPEN`
+### #3 设备端通知分片的 MTU 兜底写反了 — `FIXED`
 
 | | |
 | --- | --- |
@@ -100,20 +110,20 @@ if self.mtu and self.mtu > 23:    # ← 恰好排除了 MTU=23（未协商）这
 
 ## P1 — 功能/健壮性缺陷
 
-### #4 `ble_client.py` 保活间隔等于看门狗超时 — `OPEN`
+### #4 `ble_client.py` 保活间隔等于看门狗超时 — `FIXED`
 
 `tools/ble_client.py:303` 是 `if n % 25 == 0:`，注释却写「设备端 **90 秒**空闲会踢人」。
 实际 `config.BLE_IDLE_TIMEOUT_MS = 25000`（25 秒），且 `_check_idle()` 从**连接时刻**
 开始计时。所以 `console` 模式的第一次 ping 正好踩在超时边界上，容易被反复踢下线
 再重新广播。`app.js` 用的是 10 秒，两个客户端不一致。
 
-### #5 `ble_client.py` 推送不校验 ack 的权威计数 — `OPEN`
+### #5 `ble_client.py` 推送不校验 ack 的权威计数 — `FIXED`
 
 `tools/ble_client.py:196-219` 收到 ack 后无条件 `off += len(piece)`，设备回的
 `m["g"]`（权威已收字节数）被忽略；最后的 `done` 也不与 `len(data)` 比对。
 **设备只存了一半也会打印 `✓` 并 `return True`。**
 
-### #6 `_abort_upload()` 在 BLE 中断上下文里做文件 I/O — `OPEN`
+### #6 `_abort_upload()` 在 BLE 中断上下文里做文件 I/O — `FIXED`
 
 `blepush.py:145` 在 `_IRQ_CENTRAL_DISCONNECT` 分支里调用 `_abort_upload()`，
 它会 `delete_app()`（多次 `os.remove`）并经 `_apps_changed()` 触发
@@ -121,20 +131,20 @@ if self.mtu and self.mtu > 23:    # ← 恰好排除了 MTU=23（未协商）这
 这**违反了本文件 `_irq` 自己写的**「只做最小动作：拷贝 + 入队」，
 有阻塞 BLE 事件处理的风险。
 
-### #7 断开时不清会话状态 — `OPEN`
+### #7 断开时不清会话状态 — `FIXED`
 
 `pwa/app.js:234-244` 的 `onDisconnected()` 只清连接对象，**不清 `inbox` / `frag` /
 `waiter`**。上一会话超时残留的 `ack` / `done` 会被下一轮推送当作第一个回应
 （流控静默错位）；残留的 `ls` / `err` 会让新请求拿到旧结果；残留的 `~…` 分片会
 被拼到新会话的第一帧前面导致 JSON 解析失败。
 
-### #8 `waking` 从不清零 → 主动断开后自动重连 — `OPEN`
+### #8 `waking` 从不清零 → 主动断开后自动重连 — `FIXED`
 
 `pwa/app.js:157,181` 把 `waking` 置 `true` 后再没置回。`visibilitychange`
 （`:628-630`）只要 `waking` 为真就调 `tryReconnect()`，异常还被静默吞掉
 （`:231`）。用户按了「断开」之后，切走再切回来会**悄悄重连**。
 
-### #9 监听器与错误处理 — `OPEN`
+### #9 监听器与错误处理 — `FIXED`
 
 - `pwa/app.js:155,179,204`：`gattserverdisconnected` / `characteristicvaluechanged`
   每次重连都重复注册，`onDisconnected` 从不移除（`getDevices()` 返回同一个
@@ -146,7 +156,7 @@ if self.mtu and self.mtu > 23:    # ← 恰好排除了 MTU=23（未协商）这
 - `pwa/app.js:379-384`：`end` 兜底路径若真走到，设备回 `err: 没有正在进行的上传`，
   App 会把**成功的推送报成失败**
 
-### #10 `audio.tone()` 无长度保护且阻塞 — `OPEN`
+### #10 `audio.tone()` 无长度保护且阻塞 — `FIXED`
 
 `os/passport/audio.py:295-313`：缓冲区按时长**一次性分配**
 （16 kHz × `ms` × 2 字节）。可用堆约 110 KB，所以 `tone(440, 5000)` 需要 160 KB，
@@ -157,7 +167,7 @@ if self.mtu and self.mtu > 23:    # ← 恰好排除了 MTU=23（未协商）这
 
 **建议**：`tone()` 内部分块写入，并对 `ms` 设上限（如 1000）。
 
-### #11 「I2S 不支持 `mck`」的结论与官方文档冲突 — `OPEN`（需重测）
+### #11 「I2S 不支持 `mck`」的结论与官方文档冲突 — `已定论：ESP32 端口确实不支持`
 
 `README.md` 与 `audio.py:102-107` 把 `use_mclk=False` 的原因写成
 「**MicroPython 的 `machine.I2S` 不接受 `mck` 参数**（真机实测 TypeError）」。

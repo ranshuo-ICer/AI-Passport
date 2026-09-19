@@ -15,6 +15,11 @@ from . import config as C
 
 class Buttons:
     def __init__(self, samples=4):
+        # 三键窗口的最后一档上界就是"松开"的门槛，两者必须一致 ——
+        # 这里是唯一同时用到它们的地方，顺手把漂移挡住。
+        assert C.BTN_WINDOWS[-1][2] == C.BTN_RELEASED_MV, \
+            "BTN_WINDOWS 上界与 BTN_RELEASED_MV 不一致"
+
         self.adc = ADC(Pin(C.BTN_ADC_PIN))
         try:
             self.adc.atten(ADC.ATTN_11DB)       # 量程拉到约 0~3.3V

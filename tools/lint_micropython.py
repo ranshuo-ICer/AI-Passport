@@ -49,33 +49,66 @@ RULES = [
 COMPILED = [(re.compile(p), msg) for p, msg in RULES]
 
 
-def main():
-    problems = []
-    scanned = 0
+def device_files():
+    """要扫的设备端 .py 列表。
+
+    不只是 os/ —— `tools/hw_selftest.py` 和 `miniapps/` 下的游戏都是用
+    mpremote 直接送到设备上跑的，同样受 MicroPython 的 API 限制。
+    `miniapps/_verify.py` 是电脑上的检查器，`_` 开头的都排除。
+    """
+    out = []
     for dirpath, dirnames, filenames in os.walk(SCAN_DIR):
         dirnames[:] = [d for d in dirnames if d != "__pycache__"]
         for fn in sorted(filenames):
-            if not fn.endswith(".py"):
+            if fn.endswith(".py"):
+                out.append(os.path.join(dirpath, fn))
+
+    extra = [os.path.join(ROOT, "tools", "hw_selftest.py")]
+    miniapps = os.path.join(ROOT, "miniapps")
+    if os.path.isdir(miniapps):
+        for fn in sorted(os.listdir(miniapps)):
+            if not fn.endswith(".py") or fn.startswith("_"):
                 continue
-            path = os.path.join(dirpath, fn)
-            rel = os.path.relpath(path, ROOT)
-            scanned += 1
-            in_doc = False
-            with open(path, encoding="utf-8") as f:
-                for lineno, line in enumerate(f, 1):
-                    stripped = line.strip()
-                    # 粗略跟踪三引号 docstring，避免把注释里的说明当成违规
-                    # （本文件自己的注释里就写了 "byteswap" 来解释这个坑）
-                    quotes = stripped.count('"""') + stripped.count("'''")
-                    opens = quotes % 2 == 1
-                    was_in_doc = in_doc
-                    if opens:
-                        in_doc = not in_doc
-                    if was_in_doc or opens or stripped.startswith("#"):
-                        continue
-                    for rx, msg in COMPILED:
-                        if rx.search(line):
-                            problems.append((rel, lineno, stripped[:70], msg))
+            p = os.path.join(miniapps, fn)
+            try:
+                with open(p, encoding="utf-8") as f:
+                    head = f.read(2000)
+            except OSError:
+                continue
+            # 只收真正的小程序（带设备端钩子），把宿主脚本排除
+            if "def setup(ctx)" in head or "def loop(ctx)" in head:
+                extra.append(p)
+
+    for p in extra:
+        if os.path.isfile(p):
+            out.append(p)
+    return sorted(set(out))
+
+
+def main():
+    problems = []
+    scanned = 0
+    for path in device_files():
+        rel = os.path.relpath(path, ROOT)
+        scanned += 1
+        in_doc = False
+        with open(path, encoding="utf-8") as f:
+            for lineno, line in enumerate(f, 1):
+                stripped = line.strip()
+                # 粗略跟踪三引号 docstring，避免把说明文字当成违规。
+                # 同一行里出现两个三引号（单行 docstring）也要跳过，否则
+                # `"""... byteswap ..."""` 这种会误报。
+                quotes = stripped.count('"""') + stripped.count("'''")
+                opens = quotes % 2 == 1
+                was_in_doc = in_doc
+                if opens:
+                    in_doc = not in_doc
+                if was_in_doc or opens or quotes >= 2 \
+                        or stripped.startswith("#"):
+                    continue
+                for rx, msg in COMPILED:
+                    if rx.search(line):
+                        problems.append((rel, lineno, stripped[:70], msg))
 
     print("扫描 %d 个设备端文件" % scanned)
     if not problems:

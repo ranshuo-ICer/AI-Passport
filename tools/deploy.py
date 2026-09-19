@@ -209,15 +209,50 @@ def main():
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--no-reset", action="store_true")
     ap.add_argument("--clean", action="store_true",
-                    help="先删除设备上的 /passport 和 /apps")
+                    help="先删除设备上的 /passport 和 /apps（破坏性，需确认）")
+    ap.add_argument("--yes", action="store_true",
+                    help="跳过 --clean 的二次确认（非交互环境必须显式加）")
     args = ap.parse_args()
 
-    if not args.dry_run:
-        try:
-            import mpremote  # noqa: F401
-        except ImportError:
-            print("缺少 mpremote。请先运行：  python -m pip install mpremote")
-            return 1
+    # --dry-run 要在【探测串口之前】就返回：它的承诺是"只打印计划"，
+    # 没接设备也应该能跑（以前是在 find_port() 之后才判断，没设备直接 exit 1）。
+    dirs, copies = collect()
+    mkdir_dirs, kept = plan_commands(dirs, copies, args.apps_only, args.no_builtin)
+    print("计划：%d 个文件 → 设备（%d 个目录）" % (len(kept), len(mkdir_dirs)))
+    if args.dry_run:
+        for local, remote in kept:
+            print("   %-52s → %s/"
+                  % (local.replace(ROOT.replace("\\", "/") + "/", ""), remote))
+        print("\n目录: %s" % ", ".join(mkdir_dirs))
+        if args.clean:
+            print("[!] 已指定 --clean：真正执行时会先删除设备上的 /passport 和 /apps")
+        print("（--dry-run，未连接设备、未执行）")
+        return 0
+
+    try:
+        import mpremote  # noqa: F401
+    except ImportError:
+        print("缺少 mpremote。请先运行：  python -m pip install mpremote")
+        return 1
+
+    # 破坏性操作先确认，而且放在碰设备之前 —— 免得到最后一步才问，
+    # 更免得删完 /passport 之后传输失败、设备直接起不来。
+    if args.clean:
+        print("[!] --clean 会【递归删除】设备上的 /passport 和 /apps")
+        print("    删完到传输成功之间，设备是不完整的 —— 中途失败会起不来。")
+        if not args.yes:
+            if not sys.stdin.isatty():
+                print("[X] 非交互环境未加 --yes，拒绝执行破坏性清理。")
+                print("    确实要清理请显式加上:  --clean --yes")
+                return 1
+            try:
+                ans = input("    确认删除请输入 yes: ").strip().lower()
+            except EOFError:
+                ans = ""
+            if ans != "yes":
+                print("已取消。")
+                return 1
+        print("    已确认。")
 
     port = args.port or find_port()
     if not port:
@@ -228,17 +263,6 @@ def main():
             print("   %-12s %s" % (dev, desc))
         return 1
     print("端口: %s" % port)
-
-    dirs, copies = collect()
-    mkdir_dirs, kept = plan_commands(dirs, copies, args.apps_only, args.no_builtin)
-    print("计划：%d 个文件 → 设备（%d 个目录）" % (len(kept), len(mkdir_dirs)))
-    if args.dry_run:
-        for local, remote in kept:
-            print("   %-52s → %s/"
-                  % (local.replace(ROOT.replace("\\", "/") + "/", ""), remote))
-        print("\n目录: %s" % ", ".join(mkdir_dirs))
-        print("（--dry-run，不执行）")
-        return 0
 
     # 1) 探测
     rc, out, err = call_mpremote(
@@ -252,7 +276,7 @@ def main():
         return 1
     print("设备固件: MicroPython %s" % out.split()[-1])
 
-    # 2) 可选清空
+    # 2) 可选清空（确认已在最前面做过）
     if args.clean:
         print("清空设备上的 /passport 和 /apps …")
         rc, out, err = call_mpremote(port, ["exec", CLEAN_CODE], timeout=90)

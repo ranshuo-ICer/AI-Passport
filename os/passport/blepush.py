@@ -57,6 +57,7 @@ class AppLink:
         self._rx = []              # IRQ 里塞进来，主循环消费
         self._drop = 0
         self._last_rx = time.ticks_ms()   # 看门狗用：最后一次收到写入的时间
+        self._pending_abort = False       # IRQ 里只挂标记，文件 I/O 留给主循环
         self._up = None            # 上传中的任务
         self._pending = b""        # 拆包用的输入缓冲（命令模式下不用）
         self._rsp_buf = []
@@ -142,7 +143,10 @@ class AppLink:
             self.log("手机已连接")
         elif event == _IRQ_CENTRAL_DISCONNECT:
             self.conn = None
-            self._abort_upload(silent=True)
+            # ⚠ 不能在这里 _abort_upload()：它要删文件、刷新菜单（一堆 os.* 调用），
+            #   而这是个 BLE 事件回调，本函数开头就写明"只做最小动作"。
+            #   挂个标记，让主循环 poll() 去干。
+            self._pending_abort = True
             self._advertise()
             self.log("手机已断开")
         elif event == _IRQ_GATTS_WRITE:
@@ -173,11 +177,15 @@ class AppLink:
             return False
         data = text.encode()
         n = len(data)
-        # 通知单包不能超过 MTU-3。MTU 还没协商出来（=23）时按最小可用值发，
-        # 宁可多切几片也不能让手机收到的包被截断。
-        limit = _CHUNK_LIMIT
-        if self.mtu and self.mtu > 23:
-            limit = min(limit, self.mtu - 3)
+        # 通知单包上限 = ATT MTU - 3。
+        # ⚠ MTU 还没协商出来时是默认值 23，此时上限只有 20 字节 ——
+        #   这里必须走 20 这个分支。之前写成 `if self.mtu > 23`，
+        #   恰好把 MTU==23 这种情况漏掉，算出 180 并原样发出去，
+        #   结果被协议栈截断/发送失败，客户端永远停在半个分片上。
+        if not self.mtu or self.mtu <= 23:
+            limit = 20
+        else:
+            limit = min(_CHUNK_LIMIT, self.mtu - 3)
         if limit < 20:
             limit = 20
         if n <= limit:
@@ -218,6 +226,9 @@ class AppLink:
     # ------------------------------------------------------------------ 主循环
     def poll(self):
         """在主循环里调用：消费 IRQ 排队的写入，并检查连接看门狗。"""
+        if self._pending_abort:          # 断开事件在 IRQ 里挂的标记，这里补做清理
+            self._pending_abort = False
+            self._abort_upload(silent=True)
         while self._rx:
             payload = self._rx.pop(0)
             try:
@@ -377,9 +388,15 @@ class AppLink:
             self.send({"t": "err", "m": "未知命令 %r" % (t,)})
 
     # ------------------------------------------------------------------ 上传
-    # 上传过程中允许打断的控制命令。手机发来的 abort/end 必须能被识别，
-    # 否则它会被当成 app.py 的内容写进文件 —— 那样就永远退不出上传状态了。
-    _CTRL_DURING_UPLOAD = ("abort", "end", "put", "stop")
+    # 上传过程中允许打断的控制命令。
+    #
+    # ⚠ ping 必须在这里！客户端有 10 秒心跳，长上传（32KB = 205 个分片）期间
+    #   一定会插进来一条 {"t":"ping"}。不在白名单里的话它会走"追加写文件"分支：
+    #     · 源码里混进一行 {"t":"ping"} → SyntaxError
+    #     · 这 12 字节还算进 got，设备提前 12 字节认为收满
+    #       → 每次心跳丢掉 12 字节真实源码，**而且照常回 done**，完全静默。
+    #   这个坑由 tools/repro_ping_corruption.py 复现并守着。
+    _CTRL_DURING_UPLOAD = ("abort", "end", "put", "stop", "ping")
 
     def _handle_data(self, payload):
         # 先看是不是控制命令。代价是 app.py 里如果在正好一个分片边界上

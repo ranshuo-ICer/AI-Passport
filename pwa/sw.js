@@ -3,7 +3,7 @@
  *
  * ⚠ 改完 index.html / app.js / style.css 之后一定要把下面的版本号加一，
  *   否则浏览器会一直用旧缓存，改了跟没改一样。 */
-const CACHE = 'passport-pwa-v6';
+const CACHE = 'passport-pwa-v7';
 const ASSETS = [
   './',
   './index.html',
