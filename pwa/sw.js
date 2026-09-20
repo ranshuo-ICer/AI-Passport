@@ -14,7 +14,7 @@
  *   缓存 —— 蓝牙本来就不需要网络，离线仍然能打开。
  *
  * ⚠ 改完 index.html / app.js / style.css 之后仍然要把版本号加一。 */
-const CACHE = 'passport-pwa-v11';
+const CACHE = 'passport-pwa-v12';
 const ASSETS = [
   './',
   './index.html',

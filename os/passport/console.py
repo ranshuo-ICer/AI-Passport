@@ -183,6 +183,18 @@ class Console:
             ns["apps"] = _apps
         except Exception:                                 # noqa: BLE001
             pass
+        # 这两个模块在终端里几乎必用：display 提供颜色常量，settings 读写
+        # /settings.json。名字就取模块名，用户第一次猜的就是它。
+        try:
+            from . import display as _display
+            ns["display"] = _display
+        except Exception:                                 # noqa: BLE001
+            pass
+        try:
+            from . import settings as _settings
+            ns["settings"] = _settings
+        except Exception:                                 # noqa: BLE001
+            pass
         if self.shell is not None:
             ns["shell"] = self.shell
             for attr in ("lcd", "audio", "battery", "link", "buttons"):

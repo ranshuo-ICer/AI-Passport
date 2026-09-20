@@ -95,7 +95,8 @@ manifest.webmanifest → PWA 清单（standalone 模式）
 连上设备后，可以在手机上直接执行 Python（`gc.mem_free()`、`apps.list_apps()`、
 `lcd.fill(0x001F)`、`audio.tone(880,120)`……）。协议见
 [ble-protocol.md](ble-protocol.md) 的 4.1 节，设备端实现在
-`os/passport/console.py`。
+`os/passport/console.py`。**能用的 API 清单和一批真机验证过的配方见
+[console.md](console.md)。**
 
 界面行为：
 
@@ -114,7 +115,7 @@ manifest.webmanifest → PWA 清单（standalone 模式）
 
 ## 3. `sw.js` Service Worker
 
-- 缓存名 `passport-pwa-v11`（**改动 pwa/ 下任何资源后必须递增这个版本号**，否则浏览器会一直用旧缓存）
+- 缓存名 `passport-pwa-v12`（**改动 pwa/ 下任何资源后必须递增这个版本号**，否则浏览器会一直用旧缓存）
 - 缓存资源：index.html / style.css / app.js / manifest / icons
 - 策略（v9 起）：
   - **代码类**（HTML / JS / CSS / webmanifest，含导航请求）→ **网络优先**
@@ -134,8 +135,8 @@ manifest.webmanifest → PWA 清单（standalone 模式）
 
 | 位置 | 内容 |
 | --- | --- |
-| `pwa/sw.js` | `const CACHE = 'passport-pwa-v11'` |
-| `pwa/app.js` | `const APP_VERSION = 'v11'` |
+| `pwa/sw.js` | `const CACHE = 'passport-pwa-v12'` |
+| `pwa/app.js` | `const APP_VERSION = 'v12'` |
 | `pwa/index.html` | `<span id="appVer">`（由 app.js 的 `init()` 填入） |
 
 界面上标题旁会显示这个版本号。**手机上报版本号**是判断"跑的是新版还是缓存旧版"

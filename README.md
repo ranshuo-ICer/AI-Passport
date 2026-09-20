@@ -122,8 +122,8 @@ def on_key(ctx, key):
 
 | 检查 | 结果 |
 | --- | --- |
-| `tools/test_protocol.py` | 31 项通过（BLE 协议状态机 + 分片间隔回归） |
-| `tools/test_console.py` | 31 项通过（BLE 终端执行环境） |
+| `tools/test_protocol.py` | 41 项通过（BLE 协议状态机 + 分片间隔回归） |
+| `tools/test_console.py` | 44 项通过（BLE 终端执行环境） |
 | `tools/test_audio.py` | 103 项通过（ES8311 寄存器 / 分频 / 音量） |
 | `tools/lint_micropython.py` | 干净（拦截「CPython 有、MicroPython 没有」的 API） |
 | `tools/check_docs.py` | 12 项通过（文档一致性） |

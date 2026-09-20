@@ -19,7 +19,7 @@ const NAME_RE = /^[a-z0-9_-]{1,16}$/;
 /* 版本号：必须和 sw.js 里的 CACHE 版本、以及 index.html 的显示保持一致。
  * 手机上界面标题旁边显示的就是它 —— 出问题时报这个号，就能立刻判断
  * "跑的是新版还是浏览器缓存里的旧版"，省掉一整轮瞎猜。 */
-const APP_VERSION = 'v11';
+const APP_VERSION = 'v12';
 
 let device = null, server = null, cmdChar = null, rspChar = null;
 let connected = false;
@@ -539,10 +539,11 @@ async function termReset() {
 const TERM_SNIPPETS = [
   ['内存', 'import gc\nprint("free", gc.mem_free(), "alloc", gc.mem_alloc())'],
   ['小程序', 'for a in apps.list_apps():\n    print(a["n"], a["title"], a["s"])'],
-  ['电池', 'print(battery.percent(), "%", battery.millivolts(), "mV")'],
-  ['蜂鸣', 'audio.tone(880, 120)'],
-  ['闪屏', 'lcd.fill(0x001F)'],
-  ['当前', 'print(shell.current_app())'],
+  ['电池', 'battery.poll(force=True)\nprint(battery.label(), battery.percent, battery.millivolts, "mV")'],
+  ['按键', 'print(buttons.check())'],
+  ['音阶', 'audio.melody([("C5",0.25),("E5",0.25),("G5",0.5)])'],
+  ['闪屏', 'lcd.fill(display.BLUE)'],
+  ['当前', 'print(shell.current_app(), "backlight", shell.bl_pct)'],
 ];
 
 function buildTermSnippets() {

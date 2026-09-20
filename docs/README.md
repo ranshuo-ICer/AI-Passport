@@ -14,6 +14,7 @@
 | 把设备刷成小智语音助手，或刷成 PassportOS | [`flashing.md`](flashing.md) |
 | 搞懂 PassportOS 内部怎么组织的 | [`passport-os.md`](passport-os.md) |
 | 写一个自己的小程序 | [`ble-protocol.md`](ble-protocol.md) 的「小程序 API」一节 |
+| **连上设备后能跑哪些 Python、有哪些 API** | [`console.md`](console.md) |
 | 搞清楚手机端 App 怎么工作的 | [`pwa.md`](pwa.md) |
 | 用一个具体工具（部署/刷写/测试/BLE 调试） | [`tools.md`](tools.md) |
 | **遇到问题 / 想少踩坑** | [`pitfalls.md`](pitfalls.md) |
@@ -32,6 +33,7 @@
 | [`flashing.md`](flashing.md) | 两条路线各怎么刷、怎么备份、怎么回退 | 第一次上手的人 |
 | [`passport-os.md`](passport-os.md) | 模块划分、启动流程、各文件职责、依赖关系 | 要改 OS 的人 |
 | [`ble-protocol.md`](ble-protocol.md) | BLE 命令、分帧、上传流程、小程序 API 与限制 | 要写小程序或客户端的人 |
+| [`console.md`](console.md) | BLE 终端能做什么、注入的名字、对象 API 速查、真机验证过的配方 | 想不插线查状态 / 试 API 的人 |
 | [`pwa.md`](pwa.md) | 手机端 App 的结构、连接状态机、推送流程 | 要改手机端的人 |
 | [`tools.md`](tools.md) | 每个脚本干什么、怎么用、依赖什么 | 日常使用者 |
 | [`pitfalls.md`](pitfalls.md) | **踩过的坑**：现象 → 根因 → 教训，附症状速查 | 所有人，尤其排错时 |
