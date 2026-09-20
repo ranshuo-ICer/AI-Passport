@@ -175,14 +175,31 @@ check("SINE 奇对称", all(abs(sine[i] + sine[(TBL_N // 2 + i) % TBL_N]) <= 2
                          for i in range(TBL_N)))
 
 # ---------------------------------------------------------------- 2. 合成
-print("\n[2] synth()：长度 / 淡入淡出 / 幅度")
+# 不再直接调 synth()：wave 现在**分块**推给 I2S（一次性渲染 320ms = 10 KB 连续
+# 内存在真机上 MemoryError 过）。所以这里按真实路径走 play()，把 FakeAudio 收到的
+# 每一块接起来 —— 测的就是设备上真正会跑的那段代码，而不是一个测试专用函数。
+def render(ctx, hz, ms):
+    ctx.audio.played = []
+    ctx.buf = array.array("h", bytes(W["CHUNK"] * 2))
+    ctx.pos = 0
+    ctx.fade = 8
+    n = W["play"](ctx, hz, ms)
+    if n is None:
+        return None
+    out = array.array("h")
+    for chunk in ctx.audio.played:
+        out.extend(chunk)
+    return out
+
+
+print("\n[2] play()：长度 / 淡入淡出 / 幅度（分块拼接后的结果）")
 for wf, name in enumerate(WAVES):
     for label, hz in (("A2", 110), ("A4", 440), ("E6", 1319)):
         ctx = new_ctx()
         ctx.wf = wf
         ctx.tbl = W["make_table"](wf)
         ms = 120
-        buf = W["synth"](ctx, hz, ms)
+        buf = render(ctx, hz, ms)
         expect = 16000 * ms // 1000
         if len(buf) != expect:
             check("%s %s 长度" % (name, label), False,
@@ -225,7 +242,7 @@ for wf, name in enumerate(WAVES):
         ctx.wf = wf
         ctx.tbl = W["make_table"](wf)
         # 长一点，零穿越计数才准
-        buf = W["synth"](ctx, hz, 1000)
+        buf = render(ctx, hz, 1000)
         got = measure_hz(buf)
         err = abs(got - hz) / hz
         check("%s %s(%dHz) 实测 %.1fHz 误差<2%%" % (name, label, hz, got),
@@ -251,15 +268,33 @@ ctx = new_ctx()
 ctx.audio = DeadAudio()
 ctx.wf = 0
 ctx.tbl = W["make_table"](0)
-check("音频不可用时 synth 返回 None", W["synth"](ctx, 440, 100) is None)
-check("音频不可用时 play 返回 False", W["play"](ctx, 440, 100) is False)
+check("音频不可用时 play 返回 None（推不出去）",
+      W["play"](ctx, 440, 100) is None)
 
 # 最高音 + 最短时长
 ctx2 = new_ctx()
 ctx2.wf = 3
 ctx2.tbl = W["make_table"](3)
-buf = W["synth"](ctx2, STEPS[-1][1], 20)
+buf = render(ctx2, STEPS[-1][1], 20)
 check("最低时长 20ms 也能合成", len(buf) == 320, "len=%d" % len(buf))
+
+# 分块：320ms 的推送应当切成多块，且每块不超过 CHUNK
+ctx3 = new_ctx()
+ctx3.wf = 0
+ctx3.tbl = W["make_table"](0)
+ctx3.audio.played = []
+ctx3.buf = array.array("h", bytes(W["CHUNK"] * 2))
+ctx3.pos = 0
+ctx3.fade = 8
+W["play"](ctx3, 440, 320)
+chunks = [len(c) for c in ctx3.audio.played]
+check("320ms 被切成多块推（不再一次性要 10 KB 连续内存）", len(chunks) > 1,
+      "%d 块" % len(chunks))
+check("每块不超过 CHUNK=%d" % W["CHUNK"], max(chunks) <= W["CHUNK"],
+      "最大 %d" % max(chunks))
+check("块数 = ceil(总样本/CHUNK)",
+      len(chunks) == -(-(16000 * 320 // 1000) // W["CHUNK"]),
+      "%d 块" % len(chunks))
 
 # ---------------------------------------------------------------- 5. 落盘
 print("\n[5] teardown 只写 dirty 的 kv")

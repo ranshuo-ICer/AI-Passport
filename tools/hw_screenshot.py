@@ -35,6 +35,66 @@ _CMD_X = 0x2A
 _CMD_Y = 0x2B
 _CMD_RAMWR = 0x2C
 
+# 头部宽度固定，最后回填长度；编码写成 RGB565LE-RLE。
+# 为什么压：`mpremote fs cp` 实测只有 **2.7 KB/s**（2 号那条经验：把 payload 切成
+# 小块走 REPL，来回太多），一张 153,642 字节的整屏图要 **57 秒**，20 张就是 19 分钟。
+# 而屏幕大片是纯色，RLE 之后通常只剩几 KB —— 快一两个数量级。
+# 编码名带 -RLE 是**显式声明**，不是偷偷改协议；主机侧两种都能解。
+HDR = b"FAP_SCREENSHOT_V1 %d %d RGB565LE-RLE %010d\n"
+RLE_BUF = 768
+
+
+class RleWriter:
+    """把 (计数, 像素) 对攒进一个小缓冲，满了就写文件。
+
+    不按最坏情况（1.5 字节/像素）预留大块内存 —— 这块板没有 PSRAM，
+    而这种图实际压完只有几 KB。
+    """
+
+    def __init__(self, f):
+        self.f = f
+        self.buf = bytearray(RLE_BUF)
+        self.n = 0
+        self.total = 0
+
+    def _flush(self):
+        if self.n:
+            self.f.write(memoryview(self.buf)[:self.n])
+            self.total += self.n
+            self.n = 0
+
+    def pair(self, cnt, v):
+        if self.n + 3 > RLE_BUF:
+            self._flush()
+        b = self.buf
+        b[self.n] = cnt
+        b[self.n + 1] = v & 0xFF
+        b[self.n + 2] = v >> 8
+        self.n += 3
+
+    def close(self):
+        self._flush()
+        return self.total
+
+
+def rle_band(buf, n, w):
+    """把带缓冲（小端 RGB565）按游程编码喂给 w。"""
+    i = 0
+    last = -1
+    cnt = 0
+    while i < n:
+        v = buf[i] | (buf[i + 1] << 8)
+        if v == last and cnt < 255:
+            cnt += 1
+        else:
+            if cnt:
+                w.pair(cnt, last)
+            last = v
+            cnt = 1
+        i += 2
+    if cnt:
+        w.pair(cnt, last)
+
 # 显示列表的安全上限：正常一帧只有几十条，超过说明这个 draw 不以 fill() 开头
 OPS_CAP = 2000
 
@@ -236,12 +296,12 @@ def replay(lcd, ops):
 
 
 def shoot(lcd, ops, path):
-    """按带重放显示列表，写成一个 FAP_SCREENSHOT_V1 文件。"""
+    """按带重放显示列表，写成一个 FAP_SCREENSHOT_V1（RLE 载荷）文件。"""
     install(lcd)
     gc.collect()
     with open(path, "wb") as f:
-        f.write(b"FAP_SCREENSHOT_V1 %d %d RGB565LE %d\n"
-                % (SCREEN_W, SCREEN_H, SCREEN_W * SCREEN_H * 2))
+        f.write(HDR % (SCREEN_W, SCREEN_H, 0))      # 长度先占位，最后回填
+        w = RleWriter(f)
         y = 0
         while y < SCREEN_H:
             y1 = y + BAND_ROWS
@@ -249,10 +309,13 @@ def shoot(lcd, ops, path):
                 y1 = SCREEN_H
             REC.arm(y, y1)
             replay(lcd, ops)
-            REC.swap16()
-            f.write(memoryview(REC.buf)[:SCREEN_W * (y1 - y) * 2])
+            REC.swap16()                            # 面板是大端，存档要小端
+            rle_band(REC.buf, SCREEN_W * (y1 - y) * 2, w)
             y = y1
-    return REC.pixels
+        total = w.close()
+        f.seek(0)
+        f.write(HDR % (SCREEN_W, SCREEN_H, total))
+    return total
 
 
 # ------------------------------------------------------------------ 视图
@@ -318,7 +381,7 @@ SCRIPTS = {
     "muyu": (("press", "ok", 10), ("press", "up", 10)),
     "clock": (("press", "ok", 6),),
     "sound": (("press", "ok", 6), ("press", "up", 6)),
-    "sysinfo": (("press", "ok", 4),),
+    "sysinfo": (("press", "down", 4), ("press", "down", 4)),
     "probe": (("press", "ok", 4),),
 }
 DEFAULT_SCRIPT = (("press", "ok", 4), ("press", "up", 10))
@@ -395,25 +458,53 @@ def capture_app(sh, name, cap):
     gc.collect()
 
 
+def read_spec():
+    """读 `/shot_spec.txt` 决定只录哪些视图（空/不存在 = 全都录）。
+
+    为什么要传 spec 而不是在主机侧筛：**录制本身才是大头** —— 20 个视图要跑
+    20 遍 setup/loop/按键，约 90 秒；主机侧筛只是少拉几个文件，白跑的时间一点
+    没省。所以筛选条件必须送到设备端来。
+    """
+    try:
+        with open("/shot_spec.txt") as f:
+            raw = f.read().strip()
+    except OSError:
+        return None
+    if not raw:
+        return None
+    return [x.strip() for x in raw.split(",") if x.strip()]
+
+
+def wanted(spec, name):
+    if spec is None:
+        return True
+    return any(w in name for w in spec)
+
+
 def main():
     from passport import apps as A
 
+    spec = read_spec()
     sh = make_shell()
     lcd = sh.lcd
     jobs = []
 
     for name, sel, scroll in (("menu-top", 0, 0), ("menu-mid", 11, 6)):
+        if not wanted(spec, name):
+            continue
         cap = CaptureLCD()
         capture_menu(sh, sel, scroll, cap)
         jobs.append((name, cap.ops, cap.overflow, "-"))
 
     names = [a["n"] for a in A.list_apps()]
     for n in names:
+        if not wanted(spec, "app-" + n):
+            continue
         cap = CaptureLCD()
         try:
             capture_app(sh, n, cap)
             # 顺手体检：sentry / repeater 会把共享 Audio deinit 掉再重建，
-            # 重建失败就是"退出后全系统哑掉"（known-known #25 那一类）。
+            # 重建失败就是"退出后全系统哑掉"（known-issues #25 那一类）。
             health = "audio ok" if audio_ok(sh) else "audio DEAD"
             jobs.append(("app-" + n, cap.ops, cap.overflow, health))
         except Exception as exc:                              # noqa: BLE001
@@ -425,14 +516,24 @@ def main():
     print("=" * 58)
     for name, ops, overflow, health in jobs:
         path = "/shot_%s.fap" % name
-        px = shoot(lcd, ops, path)
+        nbytes = shoot(lcd, ops, path)
         size = os.stat(path)[6]
-        print("  %-16s %4d 条绘制  %6d 像素  %7d B  %-10s%s"
-              % (name, len(ops), px, size, health,
+        print("  %-16s %4d 条绘制  %7d B(压后)  %-10s%s"
+              % (name, len(ops), nbytes, health,
                  "  [列表溢出!]" if overflow else ""))
         gc.collect()
     print("=" * 58)
     print("共 %d 张，在设备根目录 /shot_*.fap" % len(jobs))
+    # 机器可读的清单：主机侧据此在**一条会话里**把图拉回去，
+    # 不用再单独连一次设备问"有哪些文件"
+    print("SHOTS:" + ",".join("shot_%s.fap" % name for name, _o, _f, _h in jobs))
+
+    # 跑 System 时按了 DOWN 调暗屏幕，这里把背光恢复成"设置里记的那个值"，
+    # 免得截图跑完设备停在暗屏上、和 /settings.json 还对不上。
+    from passport.ui import read_backlight
+    bl = read_backlight()
+    lcd.backlight(bl)
+    print("背光已恢复为设置里的 %d%%" % bl)
 
 
 main()

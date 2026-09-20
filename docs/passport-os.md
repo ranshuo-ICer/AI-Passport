@@ -306,9 +306,15 @@ main.py
         ├─ passport.audio.Audio       ──► passport.config
         ├─ passport.blepush.AppLink   ──► passport.config, passport.apps
         │      └─ host = Shell (launch/stop_app/current_app)
+        ├─ passport.settings          ──► /settings.json（全局设置，目前只有背光）
         ├─ passport.apps              ──► passport.config
         └─ passport.ui.Ctx            ──► 持有 shell 引用
 ```
+
+**`settings.py` 存在的理由**：小程序的 kv 是 `/apps/<名字>/kv.json`，是那个小程序
+的**私有**数据；而背光是**硬件状态** —— 小程序退出后它还在，Shell 下次开机又得读
+回来。让 Shell 去读某个小程序的私有文件是错的层次，所以单开一个全局的。
+读不出来/文件坏了/类型不对一律退回默认值，绝不让一个设置文件影响开机。
 
 ## 6. 外部依赖
 

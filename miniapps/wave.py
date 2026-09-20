@@ -37,6 +37,11 @@ TBL_N = 256
 TBL_MASK = (TBL_N << 16) - 1
 PEAK = 7000                  # headroom: a full-scale square at 32767 would clip
 
+# Samples pushed to I2S per call. Same granularity as audio.py's tone()
+# (640 samples = 40 ms @ 16k): the buffer is a fixed 1280 bytes regardless of
+# how long the note is.
+CHUNK = 640
+
 WAVES = ("SINE", "SQUARE", "TRIANGLE", "SAW")
 
 # A ladder rather than every semitone: with two buttons, "every step is audible"
@@ -67,42 +72,67 @@ def make_table(kind):
     return tbl
 
 
-def synth(ctx, hz, ms):
-    """Render `ms` of `hz` into an array('h'). Returns None if audio is unusable."""
+def fill_chunk(ctx, buf, n, done, total, step, pos):
+    """Write n samples starting at index `done` into buf; return the new phase.
+
+    Split out so play() can call it per chunk - see the note there.
+    """
+    tbl = ctx.tbl
+    fade = ctx.fade
+    tail = total - fade
+    for i in range(n):
+        j = done + i
+        s = tbl[pos >> 16]
+        if j < fade:
+            s = s * j // fade
+        elif j >= tail:
+            s = s * (total - j) // fade
+        buf[i] = s
+        pos = (pos + step) & TBL_MASK
+    return pos
+
+
+def play(ctx, hz, ms):
+    """Synthesise and push to I2S in chunks. Returns the sample count, or None.
+
+    Do NOT render the whole note in one buffer. 320 ms @ 16 kHz is 10,240 bytes
+    of CONTIGUOUS memory, and this board has no PSRAM and a permanently
+    fragmented heap - audio.py's tone() used to allocate by duration (160 KB for
+    5 s) and hit MemoryError until it was chunked. Measured here: one-shot
+    rendering already died with `MemoryError: allocating 10241 bytes` under the
+    screenshot tool's tighter memory profile. Now it is 640 samples (1280 bytes)
+    per chunk, the same granularity tone() uses.
+    """
     audio = ctx.audio
     if audio is None or not audio.ok:
         return None
     rate = audio.rate
     total = rate * ms // 1000
-    buf = array.array("h", bytes(total * 2))
-    tbl = ctx.tbl
-    step = (hz * TBL_N << 16) // rate
     fade = rate // 400                       # ~2.5 ms, kills the click at both ends
     if fade < 8:
         fade = 8
-    pos = 0
-    tail = total - fade
-    for i in range(total):
-        s = tbl[pos >> 16]
-        if i < fade:
-            s = s * i // fade
-        elif i >= tail:
-            s = s * (total - i) // fade
-        buf[i] = s
-        pos = (pos + step) & TBL_MASK
-    return buf
-
-
-def play(ctx, hz, ms):
-    buf = synth(ctx, hz, ms)
-    if buf is None:
-        return False
+    ctx.fade = fade
+    step = (hz * TBL_N << 16) // rate
+    buf = ctx.buf
+    pos = ctx.pos
+    done = 0
     try:
-        ctx.audio.play_raw(buf)
+        while done < total:
+            n = CHUNK
+            if done + n > total:
+                n = total - done
+            pos = fill_chunk(ctx, buf, n, done, total, step, pos)
+            # A memoryview of an array('h') is a 16-BIT view: slice indices count
+            # ELEMENTS, not bytes. Writing [:n * 2] pushes twice as many samples -
+            # invisible for full chunks (clamped by the buffer length), but the
+            # last short chunk over-runs. The 20 ms test caught exactly that.
+            audio.play_raw(memoryview(buf)[:n])
+            done += n
     except Exception as exc:                              # noqa: BLE001
         ctx.log("play_raw failed: %s" % exc)
-        return False
-    return True
+        return None
+    ctx.pos = pos
+    return total
 
 
 # ------------------------------------------------------------------- drawing
@@ -174,6 +204,9 @@ def setup(ctx):
     ctx.step = int(ctx.kv_get("f", DEFAULT_STEP)) % len(STEPS)
     ctx.dirty = False
     ctx.tbl = make_table(ctx.wf)
+    ctx.buf = array.array("h", bytes(CHUNK * 2))   # fixed size, not per-duration
+    ctx.pos = 0
+    ctx.fade = 8
     if ctx.audio and ctx.audio.ok:
         ctx.audio.set_volume(70)
     ctx.log("wavelab %s @%dHz" % (WAVES[ctx.wf], STEPS[ctx.step][1]))
@@ -200,6 +233,7 @@ def on_key(ctx, key):
 
 
 def teardown(ctx):
+    ctx.buf = None                 # hand the buffer back (heap is tight here)
     if ctx.dirty:
         ctx.kv_set("w", ctx.wf)
         ctx.kv_set("f", ctx.step)

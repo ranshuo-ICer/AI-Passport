@@ -12,6 +12,7 @@ import time
 from . import apps
 from . import display as disp
 from . import config as C
+from . import settings
 from .audio import Audio
 from .battery import Battery
 from .blepush import AppLink
@@ -84,6 +85,22 @@ class Ctx:
             self._kv_dirty = False
 
 
+def read_backlight():
+    """从全局设置里读出背光百分比，任何异常都退回默认值。
+
+    单独抽出来是为了能被测到：Shell 构造里那一行是没法单独验的（它要真屏幕）。
+    """
+    try:
+        pct = int(settings.get("bl", C.LCD_BL_DEFAULT))
+    except (TypeError, ValueError):
+        return C.LCD_BL_DEFAULT
+    if pct < C.LCD_BL_MIN:
+        return C.LCD_BL_MIN
+    if pct > 100:
+        return 100
+    return pct
+
+
 class _Canvas:
     """把 Display 的 fill_rect/text 转到一块 framebuf 上，签名保持一致。
 
@@ -112,7 +129,11 @@ class Shell:
     _direct_draw = False
 
     def __init__(self):
-        self.lcd = Display(backlight=75)
+        # 背光是硬件状态：小程序改过之后关机再开也得还在，所以开机从全局设置里
+        # 读回来（`/settings.json`，见 passport/settings.py）。读不到、坏了、
+        # 或者值不合法都退回默认值 —— 绝不能因为一个设置文件让系统起不来。
+        self.bl_pct = read_backlight()
+        self.lcd = Display(backlight=self.bl_pct)
         self.lcd.splash("PassportOS", "booting...")
         self.buttons = Buttons()
         self.battery = Battery()

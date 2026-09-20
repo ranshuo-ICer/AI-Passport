@@ -228,6 +228,16 @@ def make_stubs(heap_total, heap_frag, clock):
 
     pkg = types.ModuleType("passport.audio")
     pkg.Audio = Audio
+    # 桩要覆盖真模块的公开名字，否则 `from passport.audio import NOTES`
+    # （内置的 sound.py 就是这么写的）会 ImportError —— 报出来像 app 的错，
+    # 其实是桩不全。用十二平均律现算，和真表同源（A4=440 / C5=523）。
+    _names = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
+    pkg.NOTES = {"REST": 0}
+    for _oct in range(2, 7):
+        for _i, _n in enumerate(_names):
+            _midi = 12 * (_oct + 1) + _i
+            pkg.NOTES["%s%d" % (_n, _oct)] = int(
+                440 * (2 ** ((_midi - 69) / 12.0)) + 0.5)
     import passport
     sys.modules["passport.audio"] = pkg
     setattr(passport, "audio", pkg)
@@ -335,6 +345,10 @@ def main():
     ap.add_argument("--frag", type=int, default=12000)
     ap.add_argument("--check-written", action="store_true",
                     help="把写出的 /apps/<name>/app.py 与本地 <name>.py 逐字节比对")
+    ap.add_argument("--allow-non-ascii", action="store_true",
+                    help="允许非 ASCII 源码。**只给 os/builtin/ 下的内置小程序用** ——"
+                         "它们走 USB 部署，不存在 BLE 截断成 UnicodeError 的风险；"
+                         "而小程序是蓝牙推的，必须纯 ASCII")
     args = ap.parse_args()
 
     src_bytes = open(args.path, "rb").read()
@@ -357,13 +371,16 @@ def main():
         print("  [FAIL] exec: %s: %s" % (type(e).__name__, e))
         return 1
 
-    # setup / on_key / teardown 是必需的（loop 可选）。原来只是 [warn] 一句，
-    # 然后 step() 里照样 g["on_key"](...) —— 缺钩子的小程序会在这里抛 KeyError，
-    # 报出来的是桩件的行号，而不是"你少写了 on_key"。现在直接判失败。
+    # 钩子按契约**全部是可选的**（os 的 `_call` 对缺失的钩子直接返回 None，
+    # 内置的 probe 就只有 setup+loop），所以缺了只提醒、不判失败。
+    #
+    # 但 step()/setup/teardown 必须**判存在再调**：原来只 warn 一句、然后照样
+    # g["on_key"](...)，缺钩子的小程序会在这里抛 KeyError，报出来的是桩件的
+    # 行号，而不是"你少写了 on_key"。
     missing = [fn for fn in ("setup", "on_key", "teardown") if fn not in g]
     if missing:
-        print("  [FAIL] 缺少必需钩子: %s" % ", ".join("%s()" % m for m in missing))
-        return 1
+        print("  [warn] 缺少钩子 %s（契约里可选，os 会跳过）"
+              % ", ".join("%s()" % m for m in missing))
 
     keys = [k for k in args.keys.split(",") if k]
     trace = []
@@ -371,7 +388,8 @@ def main():
     def step(n=1, key=None):
         for _ in range(n):
             if key is not None:
-                g["on_key"](ctx, key)
+                if "on_key" in g:            # 钩子可选，缺了就别调
+                    g["on_key"](ctx, key)
                 key = None
             ctx.frame += 1
             clock["t"] += 20
@@ -379,7 +397,8 @@ def main():
                 g["loop"](ctx)
 
     try:
-        g["setup"](ctx)
+        if "setup" in g:
+            g["setup"](ctx)
         trace.append("setup -> %s" % snap(ctx))
         # interleave key presses with idle ticks
         per = max(1, args.ticks // (len(keys) + 1))
@@ -390,7 +409,8 @@ def main():
             trace.append("%s -> %s%s" % (k, snap(ctx),
                                          "" if ctx.lcd.calls > before else " [无重绘]"))
         step(per)
-        g["teardown"](ctx)
+        if "teardown" in g:
+            g["teardown"](ctx)
     except Exception as e:
         import traceback
         tb = traceback.extract_tb(sys.exc_info()[2])[-1]
@@ -410,7 +430,7 @@ def main():
         print("  [FAIL] %d 处非法参数（尺寸/颜色类型等）:" % len(ctx.lcd.bad))
         for m in ctx.lcd.bad[:6]:
             print("         " + m)
-    if non_ascii:
+    if non_ascii and not args.allow_non_ascii:
         ok = False
         print("  [FAIL] 源码含 %d 个非 ASCII 字节（设备字体只有 ASCII，"
               "且被截断时会变成 UnicodeError）" % non_ascii)
