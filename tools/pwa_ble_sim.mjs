@@ -235,6 +235,23 @@ async function main() {
     await p;
   }
 
+  // ------------------------------------------- D 心跳自愈（什么都不点）
+  console.log('\n[D] 链路静默死掉，用户什么都不做 —— 心跳应当自己接回来');
+  {
+    const w = makeWorld();
+    const app = loadApp(w);
+    await app.connect(true);
+    const before = w.connects;
+    w.linkUp = false;                 // 锁屏期间设备看门狗把链路踢了
+    // 心跳 4 秒一次：等一个周期多一点
+    await sleep(4600);
+    check('没有任何用户操作，心跳也把链路接回来了',
+          app.connected === true && w.connects > before,
+          `connected=${app.connected} connects ${before} -> ${w.connects}`);
+    check('接回来时又发了一次 hello 完成握手',
+          w.writes.filter(t => t === '{"t":"hello"}').length >= 2);
+  }
+
   console.log('\n' + '='.repeat(66));
   console.log('通过 %d 项，失败 %d 项', PASS, FAIL);
   console.log('='.repeat(66));

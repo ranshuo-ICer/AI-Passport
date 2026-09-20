@@ -134,12 +134,19 @@ python tools/esp.py --chip esp32c3 --baud 460800 write_flash -z 0x0 firmware/xxx
 ```sh
 python tools/test_audio.py         # 90 项：ES8311 寄存器/分频/音量/I2S 参数
 python tools/lint_micropython.py   # 扫 os/ + hw_selftest + 小程序，共 28 个设备端文件
-python tools/check_pwa.py          # 前端 JS 语法 + DOM id 一致性
+python tools/check_pwa.py          # DOM id 一致性 + 资源存在 + 版本号三处一致
 python tools/check_docs.py         # 文档↔代码一致性（改完文档/代码都该跑）
 python tools/repro_ping_corruption.py   # 复现 KNOWN_ISSUES #1（修复前红、修复后绿）
+node  tools/pwa_ble_sim.mjs        # 【Node】用假 Bluetooth 栈真跑 pwa/app.js 的连接/重连逻辑
 python tools/hw_selftest.py        # 【在设备上跑】屏幕/按键/电池/音频/内存自检
 python tools/serial_probe.py       # 读串口日志（原厂或 PassportOS）
 ```
+
+`pwa_ble_sim.mjs` 是本项目**唯一一个非 Python 工具**，也是唯一能在电脑上验证
+手机端逻辑的手段：手机上的 Web Bluetooth 没法自动化，只做语法检查等于没测过。
+它用 Node 的 `vm` 把 `pwa/app.js` 真加载起来，配一套假的
+`navigator.bluetooth` / GATT 特征，驱动三条关键路径（正常连接+刷新 / 刷新时链路
+已悄悄断掉 / 上传中链路断掉不许重连）。详见 [pwa.md](pwa.md) 第 3 节。
 
 `hw_selftest.py` 是通过 mpremote 推到设备上执行的，会画屏幕、放提示音，
 **会打断正在运行的 PassportOS**。
