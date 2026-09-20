@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0b1020">
+<title>Passport 助手</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="top">
+  <div class="brand">
+    <span class="logo">P</span>
+    <div>
+      <div class="title">Passport 助手 <span id="appVer" class="ver"></span></div>
+      <div class="sub" id="devName">未连接</div>
+    </div>
+  </div>
+  <div class="btns">
+    <button id="btnPick" class="btn" title="重新打开设备选择器">换设备</button>
+    <button id="btnConnect" class="btn primary">连接</button>
+  </div>
+</header>
+
+<nav class="tabs">
+  <button class="tab active" data-tab="apps">应用</button>
+  <button class="tab" data-tab="editor">编辑器</button>
+  <button class="tab" data-tab="term">终端</button>
+  <button class="tab" data-tab="logs">日志</button>
+</nav>
+
+<main>
+  <!-- ================= 应用 ================= -->
+  <section id="tab-apps" class="panel">
+    <div class="stats" id="stats">
+      <div class="stat"><span id="statApps">–</span><label>已装小程序</label></div>
+      <div class="stat"><span id="statFree">–</span><label>剩余空间</label></div>
+      <div class="stat"><span id="statRun">–</span><label>运行中</label></div>
+    </div>
+
+    <div class="row">
+      <button id="btnRefresh" class="btn" disabled>刷新列表</button>
+      <button id="btnSyncTime" class="btn" disabled>给设备对时</button>
+      <button id="btnStop" class="btn danger" disabled>停止运行</button>
+    </div>
+
+    <h3>设备上的小程序</h3>
+    <div id="appList" class="list"><div class="empty">先连接到设备</div></div>
+
+    <h3>推送新小程序</h3>
+    <div class="card">
+      <label class="field">
+        <span>名称（小写字母/数字/-/_，≤16）</span>
+        <input id="pushName" value="myapp" autocomplete="off" spellcheck="false">
+      </label>
+      <label class="field">
+        <span>标题（显示在设备屏幕上）</span>
+        <input id="pushTitle" value="My App" autocomplete="off">
+      </label>
+      <label class="field">
+        <span>内容来源</span>
+        <select id="pushSource">
+          <option value="editor">用下方编辑器里的代码</option>
+          <option value="file">选择 .py 文件</option>
+        </select>
+      </label>
+      <input type="file" id="pushFile" accept=".py,.txt" hidden>
+      <div class="hint">代码取自「编辑器」标签页，当前 <b id="codeLen">0</b> 字节。</div>
+      <div class="row">
+        <button id="btnPush" class="btn primary" disabled>推送到设备</button>
+        <button id="btnPushRun" class="btn" disabled>推送并运行</button>
+      </div>
+      <div class="hint">提示：小程序里除了 <code>ctx</code>，还需要自己 <code>import time</code> 之类。</div>
+    </div>
+
+    <details class="card">
+      <summary>内置模板（点一下填进编辑器）</summary>
+      <div id="templates" class="templates"></div>
+    </details>
+  </section>
+
+  <!-- ================= 编辑器 ================= -->
+  <section id="tab-editor" class="panel hidden">
+    <div class="row">
+      <button id="btnFromTpl" class="btn">载入模板</button>
+      <button id="btnSaveLocal" class="btn">存到本机</button>
+      <button id="btnLoadLocal" class="btn">从本机读</button>
+      <button id="btnDownload" class="btn">导出 .py</button>
+    </div>
+    <textarea id="editor" class="code tall" spellcheck="false"></textarea>
+    <div class="hint" id="editorInfo">–</div>
+  </section>
+
+  <!-- ================= 终端 ================= -->
+  <section id="tab-term" class="panel hidden">
+    <div class="warn">
+      在设备上直接执行 Python。<strong>代码会同步跑在设备的主循环里</strong> ——
+      <code>while True:</code> 或长时间 <code>sleep</code> 会把界面和按键一起卡住，
+      只能断电重开。变量在多次执行之间保留。
+    </div>
+    <div class="row">
+      <button id="btnTermRun" class="btn primary" disabled>执行（回车）</button>
+      <button id="btnTermReset" class="btn" disabled>清空变量</button>
+      <button id="btnTermClear" class="btn">清屏</button>
+    </div>
+    <pre id="termOut" class="logs term"></pre>
+    <textarea id="termIn" class="code" rows="3" spellcheck="false"
+      placeholder="输入 Python，回车执行（Shift+回车换行，上下键翻历史）"></textarea>
+    <div class="hint" id="termInfo">未连接</div>
+    <div class="row wrap" id="termSnippets"></div>
+  </section>
+
+  <!-- ================= 日志 ================= -->
+  <section id="tab-logs" class="panel hidden">
+    <div class="row">
+      <button id="btnClearLog" class="btn">清空</button>
+      <label class="chk"><input type="checkbox" id="autoScroll" checked> 自动滚动</label>
+    </div>
+    <pre id="logs" class="logs"></pre>
+  </section>
+</main>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
