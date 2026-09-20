@@ -92,7 +92,7 @@ manifest.webmanifest → PWA 清单（standalone 模式）
 
 ## 3. `sw.js` Service Worker
 
-- 缓存名 `passport-pwa-v9`（**改动 pwa/ 下任何资源后必须递增这个版本号**，否则浏览器会一直用旧缓存）
+- 缓存名 `passport-pwa-v10`（**改动 pwa/ 下任何资源后必须递增这个版本号**，否则浏览器会一直用旧缓存）
 - 缓存资源：index.html / style.css / app.js / manifest / icons
 - 策略（v9 起）：
   - **代码类**（HTML / JS / CSS / webmanifest，含导航请求）→ **网络优先**
@@ -112,8 +112,8 @@ manifest.webmanifest → PWA 清单（standalone 模式）
 
 | 位置 | 内容 |
 | --- | --- |
-| `pwa/sw.js` | `const CACHE = 'passport-pwa-v9'` |
-| `pwa/app.js` | `const APP_VERSION = 'v9'` |
+| `pwa/sw.js` | `const CACHE = 'passport-pwa-v10'` |
+| `pwa/app.js` | `const APP_VERSION = 'v10'` |
 | `pwa/index.html` | `<span id="appVer">`（由 app.js 的 `init()` 填入） |
 
 界面上标题旁会显示这个版本号。**手机上报版本号**是判断"跑的是新版还是缓存旧版"
@@ -134,10 +134,25 @@ node tools/pwa_ble_sim.mjs
 | B 刷新时链路**已悄悄断掉** | 触发自动重连，重连后恢复已连接（而不是弹"请重新连接"） |
 | C 上传过程中链路断掉 | **绝不重连**（重连要发的 hello 会被设备当 app.py 源码写进去，就是 #1 那类损坏） |
 | D 链路静默死掉、用户什么都不做 | 心跳（4 秒）自己发现问题并接回来 —— 锁屏回来点任何按钮都应该是好的 |
+| E 四种连接失败分类诊断 | 各自的建议**互不相同**（取消 / 真没设备 / 系统蓝牙栈 / 连上了没回话） |
 
 D 是最贴近真实使用的一条：手机锁屏时页面定时器被限流/冻结，设备端 25 秒空闲
 看门狗就把链路踢了，而 Android 又不保证把断开事件送到页面。旧代码要等用户动手
 才发现，再要求手动重连；现在心跳自己就补上了。
+
+### 连接失败的四种情形（真机实测，别再混成一句"连接失败"）
+
+| 情形 | 日志特征 | 该怎么办 |
+| --- | --- | --- |
+| 用户在选择器里点了取消 | `NotFoundError` + `User cancelled` | 不是故障。以前这里会刷 5 行"没找到设备"的排查建议 |
+| 选择器里真的没有设备 | `NotFoundError` | 确认设备在广播、没被别人连着 |
+| 连上了但拿不到服务 | `NetworkError: GATT Server is disconnected / Cannot retrieve services` | **系统蓝牙栈**的状态问题：到系统设置删掉 PassportOS、重启蓝牙开关；Windows 反复出现就换手机 |
+| 写入 hello 成功但设备不回 `hi` | 6 秒超时 | **链路是通的**：多半是设备被另一台设备连着、或设备应用层卡死（此时 BLE 仍会广播，看着像正常），断电重开 |
+
+第 3、4 两种最容易被误判。2026-08 的一次 PC 端排查里三种在 40 秒内全出现过，
+而当时 `ble_client.py`（Python 客户端）也连不上、设备却在正常广播（rssi=-57），
+才确认问题在 Windows 侧而非设备侧。`openGatt()` 因此记录 `e.stage`，
+`adviseConnectFailure()` 据此分流。
 
 这个测试是必要的：手机上的 Web Bluetooth 没法自动化，而这段重连逻辑如果只做
 语法检查，等于没测过。它当初一跑就抓到一个真实缺陷 —— `refreshApps()` 先建等待器

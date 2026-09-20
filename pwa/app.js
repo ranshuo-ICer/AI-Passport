@@ -19,7 +19,7 @@ const NAME_RE = /^[a-z0-9_-]{1,16}$/;
 /* 版本号：必须和 sw.js 里的 CACHE 版本、以及 index.html 的显示保持一致。
  * 手机上界面标题旁边显示的就是它 —— 出问题时报这个号，就能立刻判断
  * "跑的是新版还是浏览器缓存里的旧版"，省掉一整轮瞎猜。 */
-const APP_VERSION = 'v9';
+const APP_VERSION = 'v10';
 
 let device = null, server = null, cmdChar = null, rspChar = null;
 let connected = false;
@@ -281,50 +281,103 @@ async function connect(forceChooser) {
   } catch (e) {
     rollbackConnect();
     log('连接失败: ' + (e.name || '') + ' ' + e.message, 'err');
-    if (e.name === 'NotFoundError') {
-      toast('没找到设备。确认设备开机、屏幕显示 Passport 菜单，且没被别人连着', 5000);
-      log('排查建议：', 'err');
-      log('  1) 设备屏幕上应显示 Passport 主菜单（说明系统在跑、在广播）', 'err');
-      log('  2) 关掉其它占用蓝牙的程序 / 之前开着的本页面标签页', 'err');
-      log('  3) 设置 → 蓝牙和其他设备：若列表里有 PassportOS，先删掉', 'err');
-      log('  4) 把系统蓝牙开关关掉再打开，然后刷新本页重试', 'err');
-      log('  5) 还不行就点「换设备」强制重开选择器', 'err');
-    } else {
-      toast('连接失败: ' + e.message);
-    }
+    adviseConnectFailure(e);
   }
 }
 
-async function openGatt() {
-  server = await device.gatt.connect();
-  const service = await server.getPrimaryService(UUID_SERVICE);
-  cmdChar = await service.getCharacteristic(UUID_CMD);
-  rspChar = await service.getCharacteristic(UUID_RSP);
-  await rspChar.startNotifications();
-  rspChar.addEventListener('characteristicvaluechanged', onNotify);
+/* 按【失败在哪一步】给不同的处置建议。
+ *
+ * 实测在一次真机排查里，下面三种失败全都出现过，而它们的处置办法完全不同 ——
+ * 以前一律报"没找到设备"+5 条排查建议，于是"用户自己取消了选择器"这种根本不算
+ * 故障的情况也会刷 5 行，真正需要的信息反而被淹掉。 */
+function adviseConnectFailure(e) {
+  const name = (e && e.name) || '';
+  const msg = String((e && e.message) || '');
+  const stage = (e && e.stage) || '';
 
-  // ★ 先握手，成功了才认为"已连接"。
-  //   之前 connected=true / startHeartbeat() 放在握手之前，握手一抛错就留下
-  //   "界面显示已连接、按钮可用、心跳还在打、但 device 已被置空"的僵死状态，
-  //   点「断开」也没用（device.gatt 抛 TypeError 被吞），只能刷新页面。
-  const p = awaitMsg(['hi', 'err'], 6000);
-  await sendCmd({ t: 'hello' });
-  const hi = await p;
-
-  connected = true;
-  setUi(true);
-  startHeartbeat();
-  const name = device.name || 'PassportOS';
-  $('devName').textContent = name + ' 已连接';
-  $('devName').classList.add('on');
-  log('已连接: ' + name, 'sys');
-
-  if (hi.t === 'hi') {
-    log(`设备: ${hi.os}  已装 ${hi.apps} 个  可用 ${fmtBytes(hi.free)}  MTU=${hi.mtu}`, 'sys');
-    $('statApps').textContent = hi.apps;
-    $('statFree').textContent = fmtBytes(hi.free);
+  // 1) 用户在选择器里点了取消 —— 不是故障，什么都别建议
+  if (name === 'NotFoundError' && /cancel/i.test(msg)) {
+    log('你在设备选择器里点了取消（这不是故障，重连一次即可）。', 'sys');
+    return;
   }
-  await refreshApps();
+
+  // 2) 选择器里压根没有设备
+  if (name === 'NotFoundError') {
+    toast('没找到设备。确认设备开机、屏幕显示 Passport 菜单，且没被别人连着', 5000);
+    log('排查建议：', 'err');
+    log('  1) 设备屏幕上应显示 Passport 主菜单（说明系统在跑、在广播）', 'err');
+    log('  2) 关掉其它占用蓝牙的程序 / 之前开着的本页面标签页', 'err');
+    log('  3) 设置 → 蓝牙和其他设备：若列表里有 PassportOS，先删掉', 'err');
+    log('  4) 把系统蓝牙开关关掉再打开，然后刷新本页重试', 'err');
+    log('  5) 还不行就点「换设备」强制重开选择器', 'err');
+    return;
+  }
+
+  // 3) 连上了、hello 也写进去了，但设备不回话
+  //    这一种最容易被误判成"蓝牙连不上" —— 其实链路是通的，问题在别处。
+  if (stage === 'hello-handshake') {
+    log('链路是通的（hello 已写入），但设备 6 秒没回话。通常是：', 'err');
+    log('  1) 设备正被另一台设备连着 —— 例如手机上还开着本页，先关掉那个标签页', 'err');
+    log('  2) 设备系统卡住了 —— 看设备屏幕，按一下 OK 键有没有反应', 'err');
+    log('  3) 以上都不是就把设备断电重开（应用层卡死时 BLE 仍会广播，看着像正常）', 'err');
+    return;
+  }
+
+  // 4) 链路层就建不起来 / 拿不到服务：这是【系统蓝牙栈】的状态问题
+  if (/disconnected|Cannot retrieve services|Timeout|NetworkError|not found/i
+        .test(name + ' ' + msg)) {
+    log('连上了却拿不到 GATT 服务 —— 这是【系统蓝牙栈】的状态问题，一般不是设备坏了：', 'err');
+    log('  1) 设置 → 蓝牙和其他设备：把 PassportOS 删掉', 'err');
+    log('  2) 系统蓝牙开关关掉再打开，然后刷新本页重试', 'err');
+    log('  3) 反复出现就改用手机开本页 —— Android 的 BLE 栈比 Windows 稳得多', 'err');
+    return;
+  }
+
+  toast('连接失败: ' + msg);
+}
+
+async function openGatt() {
+  // 记录失败发生在哪一步 —— connect() 的 catch 靠 e.stage 决定给哪种建议。
+  let stage = 'gatt.connect';
+  try {
+    server = await device.gatt.connect();
+    stage = 'getPrimaryService';
+    const service = await server.getPrimaryService(UUID_SERVICE);
+    cmdChar = await service.getCharacteristic(UUID_CMD);
+    rspChar = await service.getCharacteristic(UUID_RSP);
+    stage = 'startNotifications';
+    await rspChar.startNotifications();
+    rspChar.addEventListener('characteristicvaluechanged', onNotify);
+
+    // ★ 先握手，成功了才认为"已连接"。
+    //   之前 connected=true / startHeartbeat() 放在握手之前，握手一抛错就留下
+    //   "界面显示已连接、按钮可用、心跳还在打、但 device 已被置空"的僵死状态，
+    //   点「断开」也没用（device.gatt 抛 TypeError 被吞），只能刷新页面。
+    stage = 'hello-handshake';
+    const p = awaitMsg(['hi', 'err'], 6000);
+    await sendCmd({ t: 'hello' });
+    const hi = await p;
+
+    connected = true;
+    setUi(true);
+    startHeartbeat();
+    const name = device.name || 'PassportOS';
+    $('devName').textContent = name + ' 已连接';
+    $('devName').classList.add('on');
+    log('已连接: ' + name, 'sys');
+
+    if (hi.t === 'hi') {
+      log(`设备: ${hi.os}  已装 ${hi.apps} 个  可用 ${fmtBytes(hi.free)}  MTU=${hi.mtu}`, 'sys');
+      $('statApps').textContent = hi.apps;
+      $('statFree').textContent = fmtBytes(hi.free);
+    }
+    await refreshApps();
+  } catch (e) {
+    if (e && typeof e === 'object' && !e.stage) {
+      try { e.stage = stage; } catch (_) { /* 只读错误对象，忽略 */ }
+    }
+    throw e;
+  }
 }
 
 /* 回到前台：先补一次 ping 续命；要是链路已经没了就重连。

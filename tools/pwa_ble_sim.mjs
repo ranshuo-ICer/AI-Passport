@@ -156,12 +156,14 @@ function loadApp(world) {
   const src = readFileSync(SRC, 'utf8') + `
 ;globalThis.__t = {
   connect, refreshApps, pushApp, sendCmd, autoReconnect, isLinkError,
+  adviseConnectFailure,
   get connected(){ return connected; },
   get reconnecting(){ return reconnecting; },
   get pushing(){ return pushing; },
   get device(){ return device; },
   setDevice(d){ device = d; },
   logs: () => logText,
+  resetLog(){ logText = ""; },
 };`;
   const ctx = vm.createContext(sandbox);
   // 收集日志文本，便于断言
@@ -250,6 +252,34 @@ async function main() {
           `connected=${app.connected} connects ${before} -> ${w.connects}`);
     check('接回来时又发了一次 hello 完成握手',
           w.writes.filter(t => t === '{"t":"hello"}').length >= 2);
+  }
+
+  // ------------------------------------------- E 三种失败要给出不同建议
+  console.log('\n[E] 连接失败的分类诊断（混成一句「连接失败」会让排查原地打转）');
+  {
+    const w = makeWorld();
+    const app = loadApp(w);
+
+    const caseOf = (err) => { app.resetLog(); app.adviseConnectFailure(err); return app.logs(); };
+
+    const cancelled = Object.assign(new Error('User cancelled the requestDevice() chooser.'),
+                                    { name: 'NotFoundError' });
+    const none = Object.assign(new Error('No Bluetooth devices were found.'), { name: 'NotFoundError' });
+    const stackBad = Object.assign(new Error('GATT Server is disconnected. Cannot retrieve services.'),
+                                   { name: 'NetworkError', stage: 'getPrimaryService' });
+    const noReply = Object.assign(new Error('等待设备响应超时'), { stage: 'hello-handshake' });
+
+    const t1 = caseOf(cancelled), t2 = caseOf(none), t3 = caseOf(stackBad), t4 = caseOf(noReply);
+
+    check('用户取消 → 明确说这不是故障，且不刷排查清单',
+          /取消/.test(t1) && !/排查建议/.test(t1));
+    check('真的没设备 → 给出排查清单', /排查建议/.test(t2));
+    check('拿不到服务 → 指向【系统蓝牙栈】而不是设备',
+          /系统蓝牙栈/.test(t3) && !/断电重开/.test(t3));
+    check('连上了但没回话 → 说明链路是通的，并提示断电重开',
+          /链路是通的/.test(t4) && /断电重开/.test(t4));
+    check('四种情况的建议互不相同',
+          new Set([t1, t2, t3, t4]).size === 4);
   }
 
   console.log('\n' + '='.repeat(66));
