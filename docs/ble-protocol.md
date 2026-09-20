@@ -63,6 +63,12 @@ RSP 上的每条通知是一段 UTF-8 文本，按首字节区分：
 
 手机侧累积逻辑见 `pwa/app.js` 的 `onNotify()`。
 
+> ⚠ **设备端发多片时，两片之间必须留间隔**（`blepush._FRAG_GAP_MS`，实测 50 ms）。
+> 连续调 `gatts_notify` 时 ESP-IDF 的 TX 队列会满，而栈**照样返回成功**、
+> 把中间几片静默丢掉 —— 客户端重组的 JSON 头尾都对、中间缺一段。
+> 这个坑随"响应超过一包"才出现，详见 [pitfalls 3.7](pitfalls.md) 与
+> [KNOWN_ISSUES #29](known-issues.md)。
+
 ---
 
 ## 4. 命令一览（手机 → 设备，JSON）

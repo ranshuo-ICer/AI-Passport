@@ -7,6 +7,7 @@
 
 import gc
 import json
+import sys
 import time
 
 from . import apps
@@ -26,6 +27,8 @@ LIST_Y = 48
 ROW_H = 28
 FOOTER_H = 22
 LONG_PRESS_MS = 1200
+# 主循环连续失败到这个次数就放弃自愈，交还给 main.py（多半显示/内存已经废了）
+_MAX_LOOP_FAILS = 20
 
 
 class Ctx:
@@ -464,9 +467,62 @@ class Shell:
         self.lcd.fill(disp.NAVY)
         self.draw_menu()
         self.link.log_line("PassportOS 就绪")
+        # ★ 主循环必须能扛住单次 tick 的异常。
+        #
+        #   以前这里是裸的 `self.tick()`：tick 里任何一处抛异常（一条 BLE 命令
+        #   处理失败、一次绘制越界、一次分配失败）都会一路穿出 run()，被 main.py
+        #   的 except 接住，整个操作系统就停在 REPL 上了。
+        #   而屏幕是 ST7789，MCU 停下后**会保留最后一帧**，"已连接"那几个字还挂
+        #   在屏幕上 —— 看起来设备完全正常，于是所有客户端（手机 / Windows、
+        #   本地 / 线上）全部连不上，却找不到原因。实测踩了这个坑很久。
+        #
+        #   现在：单次失败记日志、画错误屏、继续跑；连续失败太多次才交还给
+        #   main.py（那种情况多半是显示或内存已经废了，硬撑没意义）。
+        fails = 0
         while True:
-            self.tick()
+            try:
+                self.tick()
+                fails = 0
+            except KeyboardInterrupt:
+                raise
+            except Exception as e:                        # noqa: BLE001
+                fails += 1
+                self._report_loop_error(e, fails)
+                if fails >= _MAX_LOOP_FAILS:
+                    raise
             time.sleep_ms(20)
+
+    def _report_loop_error(self, exc, fails):
+        """主循环单次异常的留痕：串口 + /crash.log + 屏幕。
+
+        屏幕这一步最关键 —— 屏幕不写东西的话，设备看起来"一切正常"，
+        这是本项目管理上最难查的一类故障。
+        """
+        try:
+            sys.print_exception(exc)
+        except Exception:                                 # noqa: BLE001
+            pass
+        try:
+            with open("/crash.log", "a") as f:
+                f.write("--- tick #%d 失败 ---\n" % fails)
+                sys.print_exception(exc, f)
+        except Exception:                                 # noqa: BLE001
+            pass
+        try:
+            self.link.log_line("主循环异常 #%d: %s: %s"
+                               % (fails, type(exc).__name__, exc))
+        except Exception:                                 # noqa: BLE001
+            pass
+        # 屏幕可能已经不可用了（比如异常就出在显示路径上），这一步要能失败
+        try:
+            self.lcd.fill(0x9000)                          # 暗红：一眼看出不对劲
+            self.lcd.text("LOOP ERROR", 8, 8, 0xFFFF)
+            self.lcd.text("%s" % type(exc).__name__, 8, 28, 0xFFE0)
+            self.lcd.text("%s" % str(exc)[:26], 8, 48, 0xFFFF)
+            self.lcd.text("fails=%d" % fails, 8, 68, 0xFFE0)
+            self.lcd.text("see /crash.log", 8, 96, 0xFFFF)
+        except Exception:                                 # noqa: BLE001
+            pass
 
     def _init_audio(self):
         """音频是可选能力：初始化失败不能让整个系统起不来。"""

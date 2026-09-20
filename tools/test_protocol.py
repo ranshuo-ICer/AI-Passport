@@ -318,6 +318,28 @@ def main():
     check("断开后重新广播", ble.adv_calls > before)
     check("断开后 connected=False", not link.connected)
 
+    print("\n[8] 多片响应之间必须留出间隔（KNOWN_ISSUES #29 的回归保护）")
+    # 连续调 gatts_notify 时 ESP-IDF 的 TX 队列会满，而协议栈**照样返回成功**、
+    # 把中间几片静默丢掉：客户端重组出来头对、尾对、中间缺一段（实测 6 片丢
+    # 第 4、5 片）。间隔是唯一的缓解手段 —— **别把它当无用延迟"优化"掉**。
+    import time as _t
+    ble._irq(1, (1, 0, b""))          # 上一节断开了，这里要先连回来
+    sleeps = []
+    real_sleep = _t.sleep_ms
+    _t.sleep_ms = lambda ms: sleeps.append(ms)
+    try:
+        ble.sent.clear()
+        link._write_rsp("y" * 500)
+    finally:
+        _t.sleep_ms = real_sleep
+    nframes = len(ble.sent)
+    check("500 字节被切成多片", nframes > 1, "%d 帧" % nframes)
+    check("片与片之间确实调用了 sleep_ms",
+          len(sleeps) == nframes - 1,
+          "sleep %d 次 / %d 帧" % (len(sleeps), nframes))
+    check("间隔 >= 20 ms（实测 10 ms 不够，会丢中间片）",
+          bool(sleeps) and all(s >= 20 for s in sleeps), repr(sleeps[:4]))
+
     shutil.rmtree(tmp, ignore_errors=True)
 
     print("\n" + "=" * 56)

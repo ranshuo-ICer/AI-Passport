@@ -40,6 +40,18 @@ _F_WRITE = getattr(bluetooth, "FLAG_WRITE", 0x08)
 _F_WRITE_NR = getattr(bluetooth, "FLAG_WRITE_NO_RESPONSE", 0x04)
 
 _CHUNK_LIMIT = 180          # 单包通知的最大 JSON 长度，留足余量给 MTU
+# ★ 两片通知之间必须留出时间让控制器把 ACL TX 队列排空。
+#
+#   实测（2026-08，Windows + bleak，`ls` 响应 932 字节 → 6 片）：
+#   连续调 6 次 gatts_notify，**一次都不报错**，但只有第 1 片真的到了客户端，
+#   后 5 片被协议栈静默丢弃 —— ESP-IDF Bluedroid 在 TX 队列满时
+#   esp_ble_gatts_send_indicate 照样返回 ESP_OK，包却没了。
+#   客户端那边表现为"命令发出去、永远等不到回应"，设备侧却一片安静，
+#   是最难查的一类故障。
+#
+#   这也解释了为什么它是"后来才坏的"：小程序少的时候响应不足 180 字节、
+#   单片就发完了，一旦 app 数量涨上去、响应超过一包，就必然踩到。
+_FRAG_GAP_MS = 50
 
 
 class AppLink:
@@ -198,13 +210,23 @@ class AppLink:
                 i += limit
                 frames.append((b"~" if i < n else b"!") + part)
         ok = True
-        for fr in frames:
+        # 多片响应一定要留日志：notify 失败以前是【完全静默】的（只加个计数器），
+        # 客户端那边表现为"命令发出去了、永远等不到回应"，而设备侧一片安静 ——
+        # 这种故障查起来毫无抓手。列表命令就是唯一会发多片响应的那个。
+        if len(frames) > 1:
+            self.log("响应 %d 字节 → %d 片（单包上限 %d）" % (n, len(frames), limit))
+        for idx, fr in enumerate(frames):
             try:
                 self.ble.gatts_notify(self.conn, self.rsp_handle, fr)
-            except (OSError, ValueError):
+            except (OSError, ValueError) as exc:
                 ok = False
                 self._notify_fail += 1
+                self.log("!! notify 失败 第 %d/%d 片（%d 字节）: %s: %s"
+                         % (idx + 1, len(frames), len(fr),
+                            type(exc).__name__, exc))
                 break
+            if idx + 1 < len(frames) and _FRAG_GAP_MS:
+                time.sleep_ms(_FRAG_GAP_MS)
         return ok
 
     def send(self, obj):
@@ -234,8 +256,13 @@ class AppLink:
             try:
                 self._handle(payload)
             except Exception as e:                       # noqa: BLE001
-                self._abort_upload(silent=True)
-                self.send({"t": "err", "m": "%s: %s" % (type(e).__name__, e)})
+                # 报告也放进 try 里：发 err 本身再出错（内存紧张时 json.dumps /
+                # 分片都可能失败）以前会直接穿出 poll()，把整个 OS 带走。
+                try:
+                    self._abort_upload(silent=True)
+                    self.send({"t": "err", "m": "%s: %s" % (type(e).__name__, e)})
+                except Exception as exc:                 # noqa: BLE001
+                    self.log("发送错误响应也失败: %s: %s" % (type(exc).__name__, exc))
         self._check_idle()
 
     def _force_disconnect(self, reason=""):
