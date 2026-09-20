@@ -1,9 +1,9 @@
-﻿/* Passport 助手 —— 离线缓存。
+/* Passport 助手 —— 离线缓存。
  * 缓存优先，后台更新。这样断网也能打开 App（蓝牙本来就不需要网络）。
  *
  * ⚠ 改完 index.html / app.js / style.css 之后一定要把下面的版本号加一，
  *   否则浏览器会一直用旧缓存，改了跟没改一样。 */
-const CACHE = 'passport-pwa-v7';
+const CACHE = 'passport-pwa-v8';
 const ASSETS = [
   './',
   './index.html',

@@ -37,6 +37,26 @@ manifest.webmanifest → PWA 清单（standalone 模式）
 
 ## 2. `app.js` 关键逻辑
 
+> ### 手机上"显示已连接，但一点就报 GATT Server is disconnected"
+>
+> 这是真机上踩到的，成因有两半，缺一不可：
+>
+> 1. **设备端有 25 秒空闲看门狗**（`BLE_IDLE_TIMEOUT_MS`）：只要 25 秒没有任何
+>    GATT 写入就主动断开、恢复广播。而**手机浏览器在页面切后台 / 锁屏时会把
+>    `setInterval` 限流（Android Chrome 后台标签最低约每分钟一次）甚至直接冻结** ——
+>    心跳一停，设备就把链路踢了。心跳从 10 秒改成 4 秒就是为了给前台留足余量。
+> 2. **Android 的 Web Bluetooth 不保证把 `gattserverdisconnected` 事件送到页面**。
+>    所以不能只靠事件：界面还以为连着、按钮还能点，直到下一次 GATT 操作才抛
+>    `GATT Server is disconnected`（这句就是 `cmdChar.writeValue()` 抛出来的）。
+>
+> 所以三件事一起做：**动手前先看 `device.gatt.connected`**、**任何 GATT 操作
+> 报链路错就当场判定断开**、**自动重连**（已授权设备重连不需要再弹选择器）。
+> 后台被冻结是躲不掉的，靠自动重连兜底。
+>
+> ⚠ 上传过程中**绝不重连**：设备在数据模式下把收到的每个字节都当 `app.py` 的内容，
+> 重连要发的 `{"t":"hello"}` 会被原样写进源码（就是 KNOWN_ISSUES #1 那类损坏）。
+> 所以 `sendCmd()` 里的重连判断都带 `&& !pushing`。
+
 文件：[pwa/app.js](../pwa/app.js)
 
 **全局状态**：
@@ -52,7 +72,10 @@ manifest.webmanifest → PWA 清单（standalone 模式）
 | --- | --- |
 | `connect(forceChooser)` | 先 `getDevices()` 直连已授权设备；失败或 `forceChooser` 时 `requestDevice({filters:[{services:[UUID]},{namePrefix:'Passport'}]})` |
 | `pickRemembered()` | 从 `navigator.bluetooth.getDevices()` 里挑 PassportOS（**仅桌面 Chrome 实现，Android 上没有**） |
-| `startHeartbeat()` / `stopHeartbeat()` | 每 10 秒 ping 一次，给设备端 25 秒空闲看门狗续命 |
+| `startHeartbeat()` / `stopHeartbeat()` | 每 **4 秒** ping 一次，给设备端 25 秒空闲看门狗续命（原来是 10 秒 —— 手机上不够，见下） |
+| `wakeUp()` | 回到前台 / 获得焦点 / 从 bfcache 恢复：补一次 ping，链路没了就重连 |
+| `autoReconnect()` | 自动重连已授权设备（`gatt.connect()` 不会再弹选择器），3 次退避重试 |
+| `handleLinkLost()` | 判定链路已断：清会话状态 + 自动重连 |
 | `openGatt()` | 连接 GATT、取 CMD/RSP 特征、开通知、发 hello、拉列表 |
 | `onNotify(event)` | 处理 `~`/`!` 分片，重组 JSON 后 `onMsg` |
 | `onMsg(m)` | 分发 log/key/state/err，匹配 waiter 或入 inbox |
@@ -69,7 +92,7 @@ manifest.webmanifest → PWA 清单（standalone 模式）
 
 ## 3. `sw.js` Service Worker
 
-- 缓存名 `passport-pwa-v7`（**改动 pwa/ 下任何资源后必须递增这个版本号**，否则浏览器会一直用旧缓存）
+- 缓存名 `passport-pwa-v8`（**改动 pwa/ 下任何资源后必须递增这个版本号**，否则浏览器会一直用旧缓存）
 - 缓存资源：index.html / style.css / app.js / manifest / icons
 - 策略：缓存优先，后台更新；断网时返回缓存
 

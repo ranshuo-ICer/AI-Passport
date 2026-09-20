@@ -26,9 +26,11 @@ let heartbeat = null;          // 心跳定时器
 let pushing = false;           // 上传中：锁住其它命令按钮、停心跳
 
 // 设备端有"连接空闲 25 秒就自动断开恢复广播"的看门狗。
-// 我们每 10 秒 ping 一次续命：正常会话不会被误杀，
-// 而页面被关掉/崩溃时设备能在 25 秒内自己恢复广播。
-const HEARTBEAT_MS = 10000;
+// ⚠ 心跳原来写 10 秒，在手机上**不够**：手机浏览器在页面切后台 / 锁屏时会把
+//   setInterval 限流（Android Chrome 后台标签最低约每分钟一次）甚至直接冻结，
+//   心跳一停，25 秒后设备就把链路踢了。改成 4 秒，前台时留足余量。
+//   （后台被冻结是躲不掉的，那种情况靠下面的自动重连兜底。）
+const HEARTBEAT_MS = 4000;
 
 function startHeartbeat() {
   stopHeartbeat();
@@ -113,11 +115,84 @@ function onNotify(event) {
   }
 }
 
+/* ------------------------------------------------------------------ 链路断了怎么办
+ *
+ * 现象：手机上页面显示"已连接"，点任何按钮却报
+ *      "GATT Server is disconnected"。
+ *
+ * 成因有两半，缺一不可：
+ *   1. 设备端有"25 秒没有 GATT 写入就主动断开"的看门狗（恢复广播的兜底），
+ *      而手机在切后台/锁屏时会限流甚至冻结页面定时器 —— 心跳一停就被踢。
+ *   2. **Android 的 Web Bluetooth 不保证把 gattserverdisconnected 事件送到
+ *      页面**。所以不能只靠事件：界面还以为连着，直到下一次 GATT 操作才炸。
+ *
+ * 因此三件事一起做：
+ *   · 每次动手前先看 device.gatt.connected，断了先自己接上；
+ *   · 任何 GATT 操作报链路错，当场判定断开并自动重连；
+ *   · 回到前台立刻补一次 ping / 重连。
+ * 已授权过的设备可以直接 gatt.connect()，不需要再弹选择器。
+ */
+let reconnecting = false;
+
+function isLinkError(e) {
+  if (!e) return false;
+  const m = String(e.message || '');
+  return e.name === 'NetworkError' || e.name === 'InvalidStateError'
+      || /disconnect|not connected|GATT Server/i.test(m);
+}
+
+async function autoReconnect(tries = 3) {
+  if (connected || reconnecting) return false;
+  if (!device || !device.gatt) return false;
+  reconnecting = true;
+  waking = true;
+  try {
+    for (let i = 1; i <= tries; i++) {
+      try {
+        await openGatt();
+        log('已自动重连', 'sys');
+        toast('已重新连接');
+        return true;
+      } catch (e) {
+        log(`重连第 ${i}/${tries} 次失败：${e.message}`, 'err');
+        await new Promise(r => setTimeout(r, 600 * i));
+      }
+    }
+    toast('重连失败，请点右上角「连接」', 4000);
+    return false;
+  } finally {
+    reconnecting = false;
+  }
+}
+
+function handleLinkLost(reason) {
+  if (!connected) return;
+  teardownConnection('已断开', true);
+  log('链路已断开（' + reason + '），正在自动重连…', 'err');
+  toast('连接断开，正在重连…');
+  autoReconnect();
+}
+
 async function sendCmd(obj) {
-  const data = new TextEncoder().encode(JSON.stringify(obj));
   if (!cmdChar) throw new Error('未连接');
+  // 链路可能已经悄悄断了 —— 能自己接上就别让用户看到英文报错。
+  // ⚠ 上传中**绝不**重连：设备在数据模式下把收到的每个字节都当 app.py 的内容，
+  //   重连要发的 {"t":"hello"} 会被原样写进源码（就是 KNOWN_ISSUES #1 那类损坏）。
+  if (!pushing && device && device.gatt && !device.gatt.connected && !reconnecting) {
+    await autoReconnect();
+  }
+  if (!cmdChar) throw new Error('连接已断开，请重新连接');
+  const data = new TextEncoder().encode(JSON.stringify(obj));
   log('→ ' + JSON.stringify(obj), 'out');
-  await cmdChar.writeValue(data);
+  try {
+    await cmdChar.writeValue(data);
+  } catch (e) {
+    if (isLinkError(e) && !pushing) {
+      handleLinkLost('写入失败');
+      throw new Error('连接已断开（正在自动重连，稍后再试）');
+    }
+    throw e;
+  }
 }
 
 /* ------------------------------------------------------------------ 连接 */
@@ -239,13 +314,13 @@ async function openGatt() {
   await refreshApps();
 }
 
-async function tryReconnect() {
-  if (connected || !device || !device.gatt || !waking) return;
-  try {
-    await openGatt();
-  } catch (e) {
-    log('自动重连失败: ' + e.message, 'err');
-  }
+/* 回到前台：先补一次 ping 续命；要是链路已经没了就重连。
+ * 这一步很关键 —— 后台被冻结期间心跳是停的，设备多半已经把链路踢了。 */
+function wakeUp() {
+  if (document.hidden) return;
+  if (!device || !device.gatt) return;
+  if (connected) { sendCmd({ t: 'ping' }).catch(() => {}); return; }
+  if (waking) autoReconnect();
 }
 
 /* 统一的拆连接出口。
@@ -275,10 +350,13 @@ function teardownConnection(label, quiet) {
 }
 
 function onDisconnected() {
-  const was = connected;
+  // 走和"写失败"同一条路：判断开 + 自动重连。
+  // 以前这里只弹一句"设备已断开"就完了，用户还得自己去点「连接」。
+  if (!connected) return;
   teardownConnection('已断开', true);
-  log('设备已断开', 'err');
-  if (was) toast('设备已断开');
+  log('设备主动断开了链路（空闲看门狗？），正在自动重连…', 'err');
+  toast('连接断开，正在重连…');
+  autoReconnect();
 }
 
 /* gattserverdisconnected 每次重连都注册会累积（getDevices() 返回的是同一个
@@ -1003,9 +1081,11 @@ function bind() {
     };
   });
 
-  document.addEventListener('visibilitychange', () => {
-    if (!document.hidden && waking) tryReconnect();
-  });
+  // 回到前台 / 重新获得焦点 / 从 bfcache 恢复：都补一次续命或重连。
+  // 后台被冻结时心跳是停的，设备很可能已经把链路踢了。
+  document.addEventListener('visibilitychange', wakeUp);
+  window.addEventListener('focus', wakeUp);
+  window.addEventListener('pageshow', wakeUp);
 
   // 关标签页/刷新时尽量说声再见（尽力而为，发不出去还有设备端看门狗兜底）
   window.addEventListener('beforeunload', () => {
