@@ -138,6 +138,37 @@ _B_2B = b"\x2b"
 _B_2C = b"\x2c"
 
 
+# 原地 16bit 字节翻转（用于我们自己的行缓冲，见 Display.blit_row）
+_swap_in_place_fast = None
+try:
+    @micropython.viper
+    def _swap_in_place_fast(buf, n: int):
+        p = ptr8(buf)
+        i = 0
+        while i < n:
+            t = p[i]
+            p[i] = p[i + 1]
+            p[i + 1] = t
+            i += 2
+except Exception:                                         # noqa: BLE001
+    _swap_in_place_fast = None
+
+
+def _swap_in_place(buf, n):
+    if _swap_in_place_fast is not None:
+        try:
+            _swap_in_place_fast(buf, n)
+            return
+        except Exception:                                 # noqa: BLE001
+            pass
+    i = 0
+    while i < n:
+        t = buf[i]
+        buf[i] = buf[i + 1]
+        buf[i + 1] = t
+        i += 2
+
+
 def _to_be_into(src, dst, n):
     """把 src 的 n 个字节按 16bit 翻转写进 dst。viper 优先，失败退回纯 Python。"""
     if _to_be_fast is not None:
@@ -466,8 +497,29 @@ class Display:
         return fb
 
     def blit_row(self, fb, y, height):
-        """把 row_fb() 合成好的整行一次性推上屏。"""
-        self.blit(fb, 0, y, self.w, height)
+        """把 row_fb() 合成好的整行一次性推上屏。
+
+        ⚠ 这里**不能**走 blit() 那套"翻转进 self._swap 再发" —— 那会再要一块
+        和行缓冲同样大的内存（占用翻倍）。开机时 BLE 和音频刚分配完，堆正紧，
+        实测就是这一句 `MemoryError: allocating 13440 bytes` 把整个 OS 打回
+        REPL（而且 BLE 已经起来了，所以还能连上、却没人应答，现象很有迷惑性）。
+
+        这块缓冲是我们自己的、下一帧会整体重画，所以可以**原地**翻转，零额外分配。
+        """
+        if height <= 0 or y >= self.h:
+            return
+        if y + height > self.h:
+            height = self.h - y
+        n = self.w * height * 2
+        mv = memoryview(fb)
+        if len(mv) < n:
+            return
+        _swap_in_place(mv, n)
+        self.set_window(0, y, self.w - 1, y + height - 1)
+        self.dc(1)
+        self.cs(0)
+        self.spi.write(mv[:n])
+        self.cs(1)
 
     # 用 MicroPython 固件自带 framebuf 的 8x8 点阵字体（只有 ASCII），
     # 免去打包字库。中文需要用 bitmap 资源，见 docs/ble-protocol.md。
