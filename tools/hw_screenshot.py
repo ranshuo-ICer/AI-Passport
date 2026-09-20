@@ -207,6 +207,14 @@ class CaptureLCD:
     def drop_text_cache(self):
         pass
 
+    def row_fb(self, height):
+        # 返回 None = 走直接画屏幕那条路，于是每一笔都进显示列表。
+        # 两条路共用同一个 _paint_row()，像素等价性由 hw_menu_bench.py 逐字节验证。
+        return None
+
+    def blit_row(self, fb, y, height):
+        pass
+
     def set_window(self, *a):
         pass
 

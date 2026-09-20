@@ -237,6 +237,8 @@ class Display:
         self._swap = bytearray(64)
         self._fill_cache = {}
         self._fill_bytes = 0
+        self._row_cache = None      # 整行离屏合成缓冲，按需分配（见 row_fb）
+        self._row_cache_h = 0
 
         self._init_panel()
         self.backlight(backlight)
@@ -435,6 +437,38 @@ class Display:
         self.cs(1)
 
     # ------------------------------------------------------------------ 文字
+    def row_fb(self, height):
+        """一块 240x`height` 的离屏 RGB565 缓冲，用来把一整行**合成后一次上屏**。
+
+        闪烁的本质不是"画得慢"，而是**同一片像素在一次更新里被经过好几次**：
+        先铺底色、再画序号、再画标题、再画尺寸 —— 每一步都真的出现在屏上，
+        于是肉眼看到"先空一块、再长出字"。合到离屏缓冲再 blit，这一行就是
+        **一瞬间**换掉的。
+
+        分配失败返回 None，调用方退回直接画屏幕（慢一点，但结果一样）。
+        """
+        if framebuf is None:
+            return None
+        fb = self._row_cache
+        # ⚠ 不要问 fb.height —— MicroPython 的 FrameBuffer 不暴露 width/height，
+        # 只有构造参数（CPython 的也没有，别指望）。自己记。
+        if fb is not None and self._row_cache_h == height:
+            return fb
+        try:
+            fb = framebuf.FrameBuffer(bytearray(self.w * height * 2),
+                                      self.w, height, framebuf.RGB565)
+        except (MemoryError, TypeError):
+            self._row_cache = None
+            self._row_cache_h = 0
+            return None
+        self._row_cache = fb
+        self._row_cache_h = height
+        return fb
+
+    def blit_row(self, fb, y, height):
+        """把 row_fb() 合成好的整行一次性推上屏。"""
+        self.blit(fb, 0, y, self.w, height)
+
     # 用 MicroPython 固件自带 framebuf 的 8x8 点阵字体（只有 ASCII），
     # 免去打包字库。中文需要用 bitmap 资源，见 docs/ble-protocol.md。
     def _text_fb(self, width):
@@ -468,6 +502,9 @@ class Display:
         # 纯色块缓存也一起放掉：它单块 1.9 KB，同样会把堆切碎
         self._fill_cache.clear()
         self._fill_bytes = 0
+        # 整行合成缓冲 13.4 KB，是这里最大的一块，更要让出去
+        self._row_cache = None
+        self._row_cache_h = 0
 
     def text(self, s, x, y, color, bg=BLACK):
         """8x8 等宽 ASCII 文字。bg=None 时用黑色填充。"""

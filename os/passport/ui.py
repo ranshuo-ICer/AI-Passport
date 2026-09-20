@@ -84,7 +84,33 @@ class Ctx:
             self._kv_dirty = False
 
 
+class _Canvas:
+    """把 Display 的 fill_rect/text 转到一块 framebuf 上，签名保持一致。
+
+    有了它，`_paint_row` 不用关心自己是在画屏幕还是在画离屏缓冲 ——
+    同一份绘制代码两边都能跑，也就不会出现"合成版和直接版画得不一样"。
+    """
+
+    def __init__(self, fb):
+        self.fb = fb
+
+    def fill_rect(self, x, y, w, h, c):
+        self.fb.fill_rect(x, y, w, h, c)
+
+    def text(self, s, x, y, c, bg=0):
+        if not s:
+            return
+        # Display.text 会用 bg 填背景，framebuf.text 不会 —— 这里补上
+        self.fb.fill_rect(x, y, len(s) * 8, 8, 0 if bg is None else bg)
+        self.fb.text(s, x, y, c)
+
+
 class Shell:
+    # 设成 True 就完全绕开整行离屏合成、直接画屏幕。
+    # 用类属性而不是实例属性：测试和截图工具会用 `__new__` 造 Shell（跳过 __init__），
+    # 类属性保证那种构造方式也能读到它。
+    _direct_draw = False
+
     def __init__(self):
         self.lcd = Display(backlight=75)
         self.lcd.splash("PassportOS", "booting...")
@@ -202,7 +228,19 @@ class Shell:
     # ================================================================ 界面
     def draw_menu(self):
         lcd = self.lcd
-        lcd.fill(disp.NAVY)
+        # ⚠ 这里原来是一句整屏 `fill(disp.NAVY)`：153,600 字节、实测 42.7 ms，
+        # 而这 42.7 ms 里屏幕上**就是一片纯色** —— 这正是"更新时闪"的主因。
+        # 其实后面每一块都会铺满自己的区域，没人覆盖的只有三处窄带：
+        # 状态栏与列表之间的 2 px、列表末尾到页脚之间、以及 app_list 为空时的列表区。
+        # （每行底部的行间缝由 _draw_row 自己清，见那里。）
+        lcd.fill_rect(0, STATUS_Y + STATUS_H, lcd.w,
+                      LIST_Y - STATUS_Y - STATUS_H, disp.NAVY)
+        rows = self._visible_rows()
+        end_y = LIST_Y + rows * ROW_H
+        tail_y = lcd.h - FOOTER_H
+        if end_y < tail_y:
+            lcd.fill_rect(0, end_y, lcd.w, tail_y - end_y, disp.NAVY)
+
         lcd.fill_rect(0, 0, lcd.w, HEADER_H, disp.DARK)
         lcd.text2x("Passport", 6, 7, disp.CYAN, disp.DARK)
         lcd.fill_rect(0, HEADER_H - 2, lcd.w, 2, disp.CYAN)
@@ -212,44 +250,69 @@ class Shell:
         self.draw_status(force=True)
 
         if not self.app_list:
+            # 没有 _draw_row 去铺这个区域，这里必须自己清
+            lcd.fill_rect(0, LIST_Y, lcd.w, end_y - LIST_Y, disp.NAVY)
             lcd.text("no mini-app yet", 12, LIST_Y + 20, disp.SILVER, disp.NAVY)
             lcd.text("push one over BLE", 12, LIST_Y + 34, disp.GREY, disp.NAVY)
         else:
-            rows = self._visible_rows()
             for i in range(rows):
-                idx = self.scroll + i
-                self._draw_row(i, idx)
+                self._draw_row(i, self.scroll + i)
 
         lcd.fill_rect(0, lcd.h - FOOTER_H, lcd.w, FOOTER_H, disp.DARK)
         lcd.text("UP/DN move   OK run", 6, lcd.h - 15, disp.SILVER, disp.DARK)
         self._menu_dirty = False
 
+    def _paint_row_for(self, idx):
+        """把某个绝对索引画到它当前应在的那一行（不在可见范围内就什么都不做）。"""
+        row = idx - self.scroll
+        if 0 <= row < self._visible_rows() and idx < len(self.app_list):
+            self._draw_row(row, idx)
+
     def _draw_row(self, row, idx):
+        """画一行。优先**整行离屏合成后一次 blit**，拿不到缓冲才直接画屏幕。
+
+        直接画屏幕时这一行是分几十次 SPI 写上去的（底色 → 行间缝 → 选中条 →
+        序号 → 标题 → 尺寸），每一步都真的出现在屏上，肉眼就是"先空一块再长出
+        字"。合成到一行缓冲里再一次推上去，这一行就是一瞬间换掉的。
+        """
         lcd = self.lcd
         y = LIST_Y + row * ROW_H
+        fb = None
+        if not self._direct_draw:
+            fb = lcd.row_fb(ROW_H)
+        if fb is None:
+            self._paint_row(lcd, y, idx, ROW_H)
+            return
+        fb.fill(disp.NAVY)                  # 行间缝的颜色，铺满整行
+        self._paint_row(_Canvas(fb), 0, idx, ROW_H)
+        lcd.blit_row(fb, y, ROW_H)
+
+    def _paint_row(self, t, y, idx, row_h):
+        """把第 idx 项画到目标 `t` 上，行顶为 `y`。t 可以是 Display 也可以是 _Canvas。"""
+        w = self.lcd.w
         if idx >= len(self.app_list):
-            lcd.fill_rect(0, y, lcd.w, ROW_H, disp.NAVY)
+            t.fill_rect(0, y, w, row_h, disp.NAVY)
             return
         app = self.app_list[idx]
         selected = (idx == self.sel)
         bg = disp.TEAL if selected else disp.NAVY
         fg = disp.WHITE if selected else disp.SILVER
-        lcd.fill_rect(0, y, lcd.w, ROW_H - 2, bg)
+        t.fill_rect(0, y, w, row_h - 2, bg)
         if selected:
-            lcd.fill_rect(0, y, 4, ROW_H - 2, disp.YELLOW)
+            t.fill_rect(0, y, 4, row_h - 2, disp.YELLOW)
         # 序号取的是**绝对位置** idx+1，不是屏幕行号 row+1 —— 列表滚动之后
         # 行号会从 1 重新开始，那样这个数字就没有意义了。
         # 用 %2d 右对齐，个位数和两位数的小数位能对齐，看起来是一列。
-        lcd.text("%2d" % (idx + 1), 8, y + 6,
-                 disp.YELLOW if selected else disp.GREY, bg)
+        t.text("%2d" % (idx + 1), 8, y + 6,
+               disp.YELLOW if selected else disp.GREY, bg)
         title = app.get("title") or app["n"]
         # 标题区从 30 开始：左边让给 4px 选中条 + 16px 序号（8..24）。
         # 右边被尺寸文字占掉（最宽 "9999K" = 40px，从 x=196 起），
         # 所以标题最多 20 个字符（160px）—— 留一点余量，别贴上去。
-        lcd.text(title[:20], 30, y + 6, fg, bg)
+        t.text(title[:20], 30, y + 6, fg, bg)
         size = "%dK" % max(1, app["s"] // 1024)
-        lcd.text(size, lcd.w - 8 * len(size) - 4, y + 6,
-                 disp.YELLOW if selected else disp.GREY, bg)
+        t.text(size, w - 8 * len(size) - 4, y + 6,
+               disp.YELLOW if selected else disp.GREY, bg)
 
     def draw_status(self, force=False):
         # 每 tick（50 Hz）都会被调一次，而绝大多数时候什么都没变。所以先比一个
@@ -319,13 +382,24 @@ class Shell:
             gc.collect()
 
     def _tick_menu(self, key):
-        if key == "up" and self.app_list:
-            self.sel = (self.sel - 1) % len(self.app_list)
+        if key in ("up", "down") and self.app_list:
+            old_sel = self.sel
+            old_scroll = self.scroll
+            if key == "up":
+                self.sel = (self.sel - 1) % len(self.app_list)
+            else:
+                self.sel = (self.sel + 1) % len(self.app_list)
             self._clamp_scroll()
-            self._menu_dirty = True
-        elif key == "down" and self.app_list:
-            self.sel = (self.sel + 1) % len(self.app_list)
-            self._clamp_scroll()
+            if self.scroll == old_scroll:
+                # 只重画受影响的两行。
+                # 原来这里走整屏 draw_menu()：实测写 316 KB（两屏的像素）、
+                # 412 次 SPI 写、189 ms，其中头 153 KB 还是纯色空白 —— 屏上就是
+                # "全屏闪一下再重画"。移动选择其实只改了两行的底色和文字。
+                self._paint_row_for(old_sel)
+                self._paint_row_for(self.sel)
+                self._menu_dirty = False
+                return
+            # 滚动发生了 → 整个列表的内容都换了位置，只能整屏重画
             self._menu_dirty = True
         elif key == "ok" and self.app_list:
             self.launch(self.app_list[self.sel]["n"])

@@ -142,6 +142,15 @@ class RecLCD:
     def drop_text_cache(self):
         pass
 
+    # 整行离屏合成：主机上没有 framebuf，所以这里返回 None，走的正是
+    # Display.row_fb() 分配失败时的那条回退路径（直接画屏幕）。
+    # 合成路径本身由真机截图验证 —— 两条路共用同一个 _paint_row()。
+    def row_fb(self, height):
+        return None
+
+    def blit_row(self, fb, y, height):
+        self.calls.append(("blit_row", 0, y, self.w, height, None))
+
     # --- helpers for assertions ---
     def texts(self):
         return [c for c in self.calls if c[0] in ("text", "text_scale")]
@@ -349,7 +358,62 @@ r = row_boxes(sh.lcd)
 check("选中最后一个时序号正确", r and int(r[-1][0][2]) == 32,
       r[-1][0][2] if r else None)
 
-print("\n[7] 反例：旧的几何确实会重叠（证明这个测试不是空的）")
+print("\n[8] 选择移动只重画受影响的两行（闪烁的根因在这里）")
+# 原来 UP/DOWN 走整屏 draw_menu()：实测写 316 KB（两屏的像素）、412 次 SPI 写、
+# 189 ms，其中头 153 KB 还是纯色空白 —— 屏上就是"全屏闪一下再重画"。
+# 现在窗口内移动只重画两行（约 27 KB / 12 次写）。这条不变量必须锁住，
+# 否则以后有人把 _tick_menu 改回整屏重画，闪烁会悄悄回来。
+
+
+def rowwise_fills(lcd):
+    """返回这一轮里"整行宽"填充落在哪些 y 上。"""
+    out = set()
+    for kind, x, y, w, h, _s in lcd.calls:
+        if kind == "fill_rect" and x == 0 and w == 240:
+            out.add(y)
+    return out
+
+
+def full_screen_painted(lcd):
+    for kind, x, y, w, h, _s in lcd.calls:
+        if kind == "fill" or (kind == "fill_rect" and w == 240 and h >= 300):
+            return True
+    return False
+
+
+sh = make_shell(apps(19), sel=3, scroll=0)
+sh.draw_menu()
+check("前置：完整画过一次菜单", rowwise_fills(sh.lcd), "")
+
+from passport import ui as U            # noqa: E402  (只为读布局常量)
+sh.lcd.calls = []
+sh._tick_menu("down")                 # 3 -> 4，窗口没动
+want = {U.LIST_Y + 3 * U.ROW_H, U.LIST_Y + 4 * U.ROW_H}
+got = rowwise_fills(sh.lcd)
+check("只碰了旧选中行和新选中行", got == want,
+      "期望 %s，实际 %s" % (sorted(want), sorted(got)))
+check("没有整屏填充（纯色空白是闪烁主因）", not full_screen_painted(sh.lcd))
+check("绘制次数远少于整屏重画", len(sh.lcd.calls) < 20,
+      "实际 %d 笔" % len(sh.lcd.calls))
+
+# 回到原状态应当也能自洽：再按一次 up
+sh.lcd.calls = []
+sh._tick_menu("up")
+check("往回移动同样只碰两行", rowwise_fills(sh.lcd) == want,
+      "%s" % sorted(rowwise_fills(sh.lcd)))
+
+print("\n[9] 滚动发生时必须整屏重画（否则列表会画错）")
+sh = make_shell(apps(19), sel=3, scroll=0)
+sh.draw_menu()
+sh.sel = sh._visible_rows() - 1       # 正好在窗口下边缘
+sh.lcd.calls = []
+sh._tick_menu("down")                 # 触发滚动
+rows_touched = rowwise_fills(sh.lcd)
+check("滚动后确实重画了整个列表区",
+      len(rows_touched) >= sh._visible_rows(),
+      "碰了 %d 个 y，可见行 %d" % (len(rows_touched), sh._visible_rows()))
+
+print("\n[10] 反例：旧的几何确实会重叠（证明这个测试不是空的）")
 # 旧代码：标题 26 字符、从 x=10 开始 -> 10+208 = 218，而尺寸栏最窄从 196 起
 old_title_right = 10 + 26 * 8
 size_left_wide = 240 - 8 * 5 - 4
