@@ -13,7 +13,9 @@
 | --- | --- | --- |
 | `deploy.py` | 电脑 | 经 mpremote 部署 PassportOS 到设备（含回读校验） |
 | `esp.py` | 电脑 | esptool 包装，自动适配 v4（下划线）/ v5（连字符）命令名 |
-| `serve.py` | 电脑 | 本地托管 PWA（`http://127.0.0.1:8790`） |
+| `serve.py` | 电脑 | 本地托管 PWA（`http://127.0.0.1:8790`）。⚠ 只有本机能开，**手机访问不到**；手机要用在线地址 |
+| `pages_deploy.py` | 电脑 | **把 `pwa/` 发布到 GitHub Pages**（`gh-pages` 分支）：用 git 底层命令造一个孤立提交，全程不碰 main 的工作区。**改完 `pwa/` 必须重跑** |
+| `verify_pages.py` | 电脑 | **核对线上 PWA**：把线上文件抓回来和本地 `pwa/` 逐字节比对。发布推的是副本，中间隔着 push 和 Pages 构建，不抓回来比对就不知道有没有真的生效 |
 | `serial_probe.py` | 电脑 | 读串口日志 / 触发复位，看原厂固件输出 |
 | `ble_client.py` | 电脑 | 命令行 BLE 客户端：scan / console / push / run / rm / time / repro。`console <名字> --seconds N` = **先运行该小程序再监听 N 秒日志**，这是唯一能证明"小程序在真机上跑起来不报错"的办法（`push --run` 的连接太短，跑起来之后的异常收不到）；`push --chunk N` 可手动指定分片字节数 |
 | `ble_scan_detail.py` | 电脑 | 扫描并打印广播详情（RSSI、服务 UUID、厂商数据） |

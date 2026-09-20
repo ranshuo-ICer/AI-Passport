@@ -9,6 +9,16 @@
 > 一次性设置：打开后点「添加到主屏幕」。Service Worker 会把界面缓存下来，
 > **之后即使本地服务没开也能启动**（缓存优先策略）。
 
+## 0. 在线地址（手机上直接用这个）
+
+**<https://ranshuo-ICer.github.io/AI-Passport/>**
+
+本地 `http://127.0.0.1:8790` 只有那台电脑能开，**手机访问不到**；而 Web Bluetooth
+又必须要安全上下文。GitHub Pages 是 HTTPS 且公网可达，所以手机上用它 ——
+这是目前唯一能在手机上跑起来的方式。
+
+部署与更新见文末「部署到 GitHub Pages」。
+
 ---
 
 目录：[pwa/](../pwa/)
@@ -62,5 +72,50 @@ manifest.webmanifest → PWA 清单（standalone 模式）
 - 缓存名 `passport-pwa-v7`（**改动 pwa/ 下任何资源后必须递增这个版本号**，否则浏览器会一直用旧缓存）
 - 缓存资源：index.html / style.css / app.js / manifest / icons
 - 策略：缓存优先，后台更新；断网时返回缓存
+
+---
+
+## 4. 部署到 GitHub Pages
+
+在线地址：**<https://ranshuo-ICer.github.io/AI-Passport/>**
+
+```sh
+python tools/pages_deploy.py            # 发布/更新
+python tools/pages_deploy.py --dry-run  # 只看看会发布哪些文件
+```
+
+**改完 `pwa/` 之后必须重新跑一次**，站点不会自己更新。别忘了同时递增 `sw.js`
+里的缓存版本号，否则手机上还是旧界面。
+
+### 为什么是 `gh-pages` 分支，而不是 GitHub Actions
+
+两条路都要在仓库设置里点一次（`actions/configure-pages` 的 `enablement` 参数虽能
+自动启用 Pages，但它的 action.yml 写明**必须提供非 `GITHUB_TOKEN` 的 PAT**）。
+而 `gh-pages` 分支有概率被 GitHub **自动启用** —— 本项目实测推上去就直接生效了，
+一次都不用点。所以这条路的期望成本更低。
+
+### 为什么不放进你的 GitHub 主页（Hexo 博客）
+
+`ranshuo-ICer.github.io` 是 Hexo 博客，而 `hexo deploy` **通常强推覆盖整个仓库** ——
+往里手工放一个 `passport/` 目录，下次部署博客就没了。放在项目自己的 Pages 下
+（`/AI-Passport/`）与博客互不干扰。
+
+### 实现要点（`tools/pages_deploy.py`）
+
+用 `git hash-object` / `update-index` / `write-tree` / `commit-tree` 直接构造一个
+**孤立提交**，全程不碰 `main` 的工作区、也不切分支 —— `git worktree` 和
+`checkout --orphan` 都会动到当前检出状态，在这个仓库里那样做风险太大。
+
+发布内容 = `pwa/` 下的文件（排除 `*.py` 这种开发脚本）+ 一个 `.nojekyll`
+（关掉 Jekyll，它默认会忽略下划线开头的文件）。
+
+> ⚠ 站点内容是 `pwa/` 的**副本**，`gh-pages` 分支不要手工编辑 —— 下次
+> `pages_deploy.py` 会用 `main` 的内容整体覆盖它。
+
+### 自检
+
+```sh
+python tools/verify_pages.py     # 逐个抓回线上文件，和本地 pwa/ 逐字节比对
+```
 
 ---

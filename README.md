@@ -8,6 +8,11 @@
 
 本仓库提供**两条互相独立的固件路线**，外加一套可以自己写小程序的操作系统。
 
+> 🔗 **手机 App 已经上线，手机直接打开就能用**：
+> <https://ranshuo-ICer.github.io/AI-Passport/>
+> （Web Bluetooth 要求 HTTPS 或 localhost，所以必须走这个地址，不能双击本地
+> `index.html`。部署方式见 [`docs/pwa.md`](docs/pwa.md#部署到-github-pages)。）
+
 ---
 
 ## 两条路线
@@ -147,7 +152,7 @@ AI-Passport/
 │   └── builtin/              随系统发布的示例小程序（5 个）
 ├── pwa/                      手机端 App（Web Bluetooth）
 ├── miniapps/                 可推送的小程序合集 + 开发工具
-├── tools/                    部署 / 托管 / 测试 / 诊断脚本（29 个）
+├── tools/                    部署 / 托管 / 测试 / 诊断脚本（31 个）
 └── upstream/                 官方开发仓库 main 分支快照（硬件事实来源）
 ```
 
