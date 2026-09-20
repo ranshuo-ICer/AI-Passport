@@ -17,7 +17,7 @@
 | `pages_deploy.py` | 电脑 | **把 `pwa/` 发布到 GitHub Pages**（`gh-pages` 分支）：用 git 底层命令造一个孤立提交，全程不碰 main 的工作区。**改完 `pwa/` 必须重跑** |
 | `verify_pages.py` | 电脑 | **核对线上 PWA**：把线上文件抓回来和本地 `pwa/` 逐字节比对。发布推的是副本，中间隔着 push 和 Pages 构建，不抓回来比对就不知道有没有真的生效 |
 | `serial_probe.py` | 电脑 | 读串口日志 / 触发复位，看原厂固件输出 |
-| `ble_client.py` | 电脑 | 命令行 BLE 客户端：scan / console / push / run / rm / time / repro。`console <名字> --seconds N` = **先运行该小程序再监听 N 秒日志**，这是唯一能证明"小程序在真机上跑起来不报错"的办法（`push --run` 的连接太短，跑起来之后的异常收不到）；`push --chunk N` 可手动指定分片字节数 |
+| `ble_client.py` | 电脑 | 命令行 BLE 客户端：scan / console / push / run / rm / time / repro / **py**。`console <名字> --seconds N` = **先运行该小程序再监听 N 秒日志**，这是唯一能证明"小程序在真机上跑起来不报错"的办法（`push --run` 的连接太短，跑起来之后的异常收不到）；`push --chunk N` 可手动指定分片字节数；`py <文件>` = 在设备上执行该文件的 Python（BLE 终端，`-` 表示从标准输入读） |
 | `ble_scan_detail.py` | 电脑 | 扫描并打印广播详情（RSSI、服务 UUID、厂商数据） |
 | `ble_dump_gatt.py` | 电脑 | 连上后 dump 完整 GATT 服务/特征表 |
 | `ble_disconnect_test.py` | 电脑 | 复现"主机抓着 BLE 链路不放"的问题 |
@@ -118,7 +118,7 @@ python tools/esp.py --chip esp32c3 --baud 460800 write_flash -z 0x0 firmware/xxx
 
 | 脚本 | 用途 |
 | --- | --- |
-| `ble_client.py` | 全功能命令行客户端（`scan` / `console` / `push` / `run` / `rm` / `time` / `info` / `repro`），用于在电脑上复现和调试协议，不依赖手机 |
+| `ble_client.py` | 全功能命令行客户端（`scan` / `console` / `push` / `run` / `rm` / `time` / `info` / `repro` / `py`），用于在电脑上复现和调试协议，不依赖手机 |
 | `ble_scan_detail.py` | 扫描并打印广播详情，确认名字是否落在扫描响应里 |
 | `ble_dump_gatt.py` | dump 完整 GATT 表，排查"特征值找不到" |
 | `ble_disconnect_test.py` | 复现"客户端断开后主机仍抓着链路"的问题 |
@@ -133,6 +133,7 @@ python tools/esp.py --chip esp32c3 --baud 460800 write_flash -z 0x0 firmware/xxx
 
 ```sh
 python tools/test_audio.py         # 90 项：ES8311 寄存器/分频/音量/I2S 参数
+python tools/test_console.py       # 31 项：BLE 终端的执行环境（表达式/状态/异常/截断）
 python tools/lint_micropython.py   # 扫 os/ + hw_selftest + 小程序，共 28 个设备端文件
 python tools/check_pwa.py          # DOM id 一致性 + 资源存在 + 版本号三处一致
 python tools/check_docs.py         # 文档↔代码一致性（改完文档/代码都该跑）

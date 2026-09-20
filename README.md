@@ -122,16 +122,18 @@ def on_key(ctx, key):
 
 | 检查 | 结果 |
 | --- | --- |
-| `tools/test_protocol.py` | 28 项通过（BLE 协议状态机） |
-| `tools/test_audio.py` | 90 项通过（ES8311 寄存器 / 分频 / 音量） |
+| `tools/test_protocol.py` | 31 项通过（BLE 协议状态机 + 分片间隔回归） |
+| `tools/test_console.py` | 31 项通过（BLE 终端执行环境） |
+| `tools/test_audio.py` | 103 项通过（ES8311 寄存器 / 分频 / 音量） |
 | `tools/lint_micropython.py` | 干净（拦截「CPython 有、MicroPython 没有」的 API） |
-| `tools/check_docs.py` | 11 项通过（文档一致性） |
-| `tools/repro_ping_corruption.py` | **exit 1 = 缺陷仍在**（这是预期的，修好后会变 0） |
+| `tools/check_docs.py` | 12 项通过（文档一致性） |
+| `tools/repro_ping_corruption.py` | exit 0 = 缺陷已修（修复前 exit 1） |
 
 **真机已验证**：MicroPython 刷写、屏幕点亮、按键 ADC、电池读数（85% / 4085 mV）、
-音频出声（880 / 1319 Hz）、小程序录音。
+音频出声（880 / 1319 Hz）、小程序录音、BLE 握手 / 列目录 / 推送小程序 / 删除、
+BLE 终端执行 Python。
 
-**还没验证**：手机 App 端到端 BLE 推送、麦克风录音质量、长时间稳定性。
+**还没验证**：麦克风录音质量、长时间稳定性（连续跑数小时）、iOS 上的表现。
 
 > 已知缺陷（含一个会**静默损坏上传源码**的跨端 bug）全部记录在
 > [`docs/known-issues.md`](docs/known-issues.md)，**没有藏**。
@@ -152,7 +154,7 @@ AI-Passport/
 │   └── builtin/              随系统发布的示例小程序（5 个）
 ├── pwa/                      手机端 App（Web Bluetooth）
 ├── miniapps/                 可推送的小程序合集 + 开发工具
-├── tools/                    部署 / 托管 / 测试 / 诊断脚本（31 个）
+├── tools/                    部署 / 托管 / 测试 / 诊断脚本（32 个）
 └── upstream/                 官方开发仓库 main 分支快照（硬件事实来源）
 ```
 

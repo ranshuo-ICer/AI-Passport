@@ -19,7 +19,7 @@ const NAME_RE = /^[a-z0-9_-]{1,16}$/;
 /* 版本号：必须和 sw.js 里的 CACHE 版本、以及 index.html 的显示保持一致。
  * 手机上界面标题旁边显示的就是它 —— 出问题时报这个号，就能立刻判断
  * "跑的是新版还是浏览器缓存里的旧版"，省掉一整轮瞎猜。 */
-const APP_VERSION = 'v10';
+const APP_VERSION = 'v11';
 
 let device = null, server = null, cmdChar = null, rspChar = null;
 let connected = false;
@@ -184,7 +184,7 @@ function handleLinkLost(reason) {
   autoReconnect();
 }
 
-async function sendCmd(obj) {
+async function sendCmd(obj, quiet) {
   if (!cmdChar) throw new Error('未连接');
   // 链路可能已经悄悄断了 —— 能自己接上就别让用户看到英文报错。
   // ⚠ 上传中**绝不**重连：设备在数据模式下把收到的每个字节都当 app.py 的内容，
@@ -194,7 +194,7 @@ async function sendCmd(obj) {
   }
   if (!cmdChar) throw new Error('连接已断开，请重新连接');
   const data = new TextEncoder().encode(JSON.stringify(obj));
-  log('→ ' + JSON.stringify(obj), 'out');
+  if (!quiet) log('→ ' + JSON.stringify(obj), 'out');
   try {
     await cmdChar.writeValue(data);
   } catch (e) {
@@ -365,6 +365,7 @@ async function openGatt() {
     $('devName').textContent = name + ' 已连接';
     $('devName').classList.add('on');
     log('已连接: ' + name, 'sys');
+    termWrite('--- 已连接 ' + name + ' --- 输入 Python，回车执行\n', 't-sys');
 
     if (hi.t === 'hi') {
       log(`设备: ${hi.os}  已装 ${hi.apps} 个  可用 ${fmtBytes(hi.free)}  MTU=${hi.mtu}`, 'sys');
@@ -439,13 +440,123 @@ function setUi(on) {
   // 上传期间只留「断开」可用，其余命令一律锁死：
   // awaitMsg 只有一个等待槽，中途插入别的命令会把推送的 ack 等待顶掉。
   const lock = on && !pushing;
-  for (const id of ['btnRefresh', 'btnSyncTime', 'btnStop', 'btnPush', 'btnPushRun'])
+  for (const id of ['btnRefresh', 'btnSyncTime', 'btnStop', 'btnPush', 'btnPushRun',
+                    'btnTermRun', 'btnTermReset'])
     $(id).disabled = !lock;
   $('btnConnect').textContent = on ? '断开' : '连接';
   $('btnPick').disabled = pushing;
+  termInfo();
 }
 
-/* ------------------------------------------------------------------ 操作 */
+/* --------------------------------------------------------------- 终端
+ *
+ * 连上设备后直接执行 Python。协议见 docs/ble-protocol.md 的 4.1 节。
+ *
+ * 两个必须自己处理的现实约束：
+ *
+ * 1. **单次 GATT 写实测硬上限 512 字节 JSON**（不是 gatts_set_buffer 声明的
+ *    2048）。所以源码要拆片，前几片带 more:true 只让设备累积，最后一片才执行。
+ * 2. **只有一个等待槽**（awaitMsg 的 waiter）。必须一片一片串行等回应，
+ *    不能并发发。上传中更不能碰 —— 会把推送的 ack 等待顶掉。
+ */
+const TERM_CHUNK = 400;         // 每片 JSON 的字节上限，留余量给不同主机的长写实现
+let termHistory = [], termHistIdx = -1;
+
+function termWrite(text, cls) {
+  const el = $('termOut');
+  const span = document.createElement('span');
+  if (cls) span.className = cls;
+  span.textContent = text;
+  el.appendChild(span);
+  el.scrollTop = el.scrollHeight;
+}
+
+function termInfo() {
+  const el = $('termInfo');
+  if (!connected) { el.textContent = '未连接设备'; return; }
+  const n = termHistory.length;
+  el.textContent = `已连接 · 变量保留在设备上 · 历史 ${n} 条`;
+}
+
+/* 把源码切成若干片，保证每片 JSON 编码后不超过 limit 字节。
+ * 按**码点**切而不是按字节：JSON 里非 ASCII 会膨胀（一个汉字 3 字节），
+ * 所以每加一个字符都重新量一次。 */
+function splitConsoleSrc(src, limit = TERM_CHUNK) {
+  const enc = new TextEncoder();
+  const parts = [];
+  let cur = '';
+  for (const ch of src) {
+    const trial = cur + ch;
+    const n = enc.encode(JSON.stringify({ t: 'py', c: trial, more: true })).length;
+    if (n > limit && cur) { parts.push(cur); cur = ch; } else cur = trial;
+  }
+  parts.push(cur);
+  return parts;
+}
+
+async function termSend(src) {
+  if (!connected) { toast('先连接设备'); return; }
+  if (pushing) { toast('正在上传小程序，终端稍后再用'); return; }
+  if (!src.trim()) return;
+
+  termWrite('>>> ' + (src.includes('\n') ? src.split('\n').join('\n... ') : src) + '\n',
+            't-cmd');
+  const parts = splitConsoleSrc(src);
+  try {
+    for (let i = 0; i < parts.length; i++) {
+      const last = (i === parts.length - 1);
+      const p = awaitMsg(['py'], last ? 60000 : 15000);
+      // 源码在日志里会很吵，这里静音；终端自己打了命令
+      await sendCmd(last ? { t: 'py', c: parts[i] }
+                         : { t: 'py', c: parts[i], more: true }, true);
+      const r = await p;
+      if (!last) continue;
+      const out = r.out || '';
+      if (out) termWrite(out.endsWith('\n') ? out : out + '\n', r.ok ? 't-ok' : 't-err');
+      else if (r.ok) termWrite('(无输出)\n', 't-sys');
+      termWrite(`[${r.ok ? 'ok' : '出错'} · ${r.ms} ms` +
+                (parts.length > 1 ? ` · 源码 ${src.length} 字 / ${parts.length} 片` : '') +
+                ']\n', 't-sys');
+    }
+  } catch (e) {
+    termWrite('! ' + e.message + '\n', 't-err');
+  }
+  termInfo();
+}
+
+async function termReset() {
+  if (!connected) { toast('先连接设备'); return; }
+  try {
+    const p = awaitMsg(['pyreset'], 10000);
+    await sendCmd({ t: 'pyreset' });
+    await p;
+    termWrite('[已清空设备上的变量]\n', 't-sys');
+  } catch (e) {
+    termWrite('! ' + e.message + '\n', 't-err');
+  }
+}
+
+const TERM_SNIPPETS = [
+  ['内存', 'import gc\nprint("free", gc.mem_free(), "alloc", gc.mem_alloc())'],
+  ['小程序', 'for a in apps.list_apps():\n    print(a["n"], a["title"], a["s"])'],
+  ['电池', 'print(battery.percent(), "%", battery.millivolts(), "mV")'],
+  ['蜂鸣', 'audio.tone(880, 120)'],
+  ['闪屏', 'lcd.fill(0x001F)'],
+  ['当前', 'print(shell.current_app())'],
+];
+
+function buildTermSnippets() {
+  const box = $('termSnippets');
+  for (const [label, code] of TERM_SNIPPETS) {
+    const b = document.createElement('button');
+    b.className = 'snippet';
+    b.textContent = label;
+    b.onclick = () => { $('termIn').value = code; $('termIn').focus(); };
+    box.appendChild(b);
+  }
+}
+
+/* --------------------------------------------------------------- 操作 */
 function fmtBytes(n) {
   if (n == null || n < 0) return '–';
   if (n < 1024) return n + ' B';
@@ -1104,6 +1215,34 @@ function bind() {
   $('btnSyncTime').onclick = () => syncTime().catch(e => toast(e.message));
   $('btnStop').onclick = () => stopApp().catch(e => toast(e.message));
 
+  /* 终端。回车执行、Shift+回车换行 —— 手机上没法按 Ctrl，所以回车必须能执行。 */
+  $('btnTermRun').onclick = () => {
+    const src = $('termIn').value;
+    if (!src.trim()) return;
+    if (termHistory[termHistory.length - 1] !== src) termHistory.push(src);
+    if (termHistory.length > 100) termHistory.shift();
+    termHistIdx = termHistory.length;
+    termSend(src);
+  };
+  $('btnTermReset').onclick = () => termReset();
+  $('btnTermClear').onclick = () => { $('termOut').innerHTML = ''; };
+  $('termIn').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      $('btnTermRun').click();
+    } else if (e.key === 'ArrowUp') {
+      if (!termHistory.length) return;
+      e.preventDefault();
+      termHistIdx = Math.max(0, termHistIdx - 1);
+      $('termIn').value = termHistory[termHistIdx] || '';
+    } else if (e.key === 'ArrowDown') {
+      if (!termHistory.length) return;
+      e.preventDefault();
+      termHistIdx = Math.min(termHistory.length, termHistIdx + 1);
+      $('termIn').value = termHistory[termHistIdx] || '';
+    }
+  });
+
   $('btnPush').onclick = () => pushApp(
     $('pushName').value.trim(), $('pushTitle').value.trim(), currentSource(), false);
   $('btnPushRun').onclick = () => pushApp(
@@ -1189,6 +1328,7 @@ function updateCodeLen() {
 (function init() {
   bind();
   buildTemplates();
+  buildTermSnippets();
   const saved = loadLocal();
   $('editor').value = saved || TEMPLATES['最小示例'];
   updateCodeLen();

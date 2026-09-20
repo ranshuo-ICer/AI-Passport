@@ -329,6 +329,37 @@ async def run(args):
             ok = await cmd_push(cli, args.path, args.name, args.title, args.run,
                                 args.chunk)
             return 0 if ok else 1
+        elif args.action == "py":
+            # BLE 终端：把一段 Python 发给设备执行。位置参数是**文件路径**
+            # （"-" 表示从标准输入读），不接受行内字面源码 —— 这个项目的教训：
+            # 在 PowerShell 里给 Python 做引号转义翻车过很多次，写进文件最稳。
+            if not args.path:
+                print("py 需要一个文件路径（或 - 从标准输入读）")
+                return 1
+            if args.path == "-":
+                src = sys.stdin.read()
+            elif os.path.isfile(args.path):
+                with open(args.path, encoding="utf-8") as f:
+                    src = f.read()
+            else:
+                print("找不到文件: %s（py 只接受文件路径，避免 shell 引号问题）"
+                      % args.path)
+                return 1
+            parts = split_console_src(src)
+            for i, part in enumerate(parts):
+                last = (i == len(parts) - 1)
+                await cli.send({"t": "py", "c": part} if last
+                               else {"t": "py", "c": part, "more": True})
+                if not last:
+                    await cli.wait(["py"], timeout=15)
+            if len(parts) > 1:
+                print("（源码 %d 字节，分 %d 片发送）" % (len(src), len(parts)))
+            reply = await cli.wait(["py"], timeout=60)
+            print("--- 设备输出（%s，%s ms）---"
+                  % ("成功" if reply.get("ok") else "出错", reply.get("ms")))
+            sys.stdout.write(reply.get("out") or "(无输出)")
+            print("--- 结束 ---")
+            return 0 if reply.get("ok") else 2
         elif args.action == "run":
             # 位置参数和 --name 都接受：docstring 里写的是 `run clock`，
             # 但原来只读 args.name，于是 `run clock` 实际发出去的是空名字，
@@ -411,11 +442,38 @@ async def scan():
     return 0
 
 
+def split_console_src(src, limit=400):
+    """把终端源码切成若干片，保证每片 JSON 编码后不超过 limit 字节。
+
+    为什么要切：单次 GATT 写能带的 JSON 实测硬上限是 **512 字节**（payload
+    512 成功、522 被 ATT 0x0D Invalid Attribute Value Length 拒掉），而
+    `gatts_set_buffer(2048)` 声明的 2048 在真机上根本够不着。
+    limit 取 400 是为了给不同主机的长写实现留余量。
+
+    按**字符**切而不是按字节：JSON 里非 ASCII 会膨胀（escape 成 \\uXXXX 时
+    一个汉字占 6 字节），所以每加一个字符都重新量一次编码后的长度。
+    """
+    import json as _json
+    parts, cur = [], ""
+    for ch in src:
+        trial = cur + ch
+        n = len(_json.dumps({"t": "py", "c": trial, "more": True}).encode())
+        if n > limit and cur:
+            parts.append(cur)
+            cur = ch
+        else:
+            cur = trial
+    parts.append(cur)
+    return parts
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("action", choices=["scan", "hello", "ls", "repro", "push",
-                                       "run", "rm", "stop", "time", "console"])
-    ap.add_argument("path", nargs="?", help="push 时的本地文件")
+                                       "run", "rm", "stop", "time", "console",
+                                       "py"])
+    ap.add_argument("path", nargs="?",
+                    help="push 时的本地文件；py 时的源码文件（- 表示标准输入）")
     ap.add_argument("--name", default=None)
     ap.add_argument("--title", default=None)
     ap.add_argument("--run", action="store_true", help="push 完立即运行")

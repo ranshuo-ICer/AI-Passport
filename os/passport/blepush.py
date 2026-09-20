@@ -40,6 +40,10 @@ _F_WRITE = getattr(bluetooth, "FLAG_WRITE", 0x08)
 _F_WRITE_NR = getattr(bluetooth, "FLAG_WRITE_NO_RESPONSE", 0x04)
 
 _CHUNK_LIMIT = 180          # 单包通知的最大 JSON 长度，留足余量给 MTU
+# 单次 GATT 写能带的 JSON 上限（实测硬上限 512，见 _handle_cmd 的 py 分支）
+MAX_CMD_WRITE = 512
+# 终端源码的总上限。分片累积超过它就拒绝 —— 否则一个手滑的粘贴会把堆吃光。
+_MAX_CONSOLE_SRC = 8192
 # ★ 两片通知之间必须留出时间让控制器把 ACL TX 队列排空。
 #
 #   实测（2026-08，Windows + bleak，`ls` 响应 932 字节 → 6 片）：
@@ -74,6 +78,8 @@ class AppLink:
         self._pending = b""        # 拆包用的输入缓冲（命令模式下不用）
         self._rsp_buf = []
         self._notify_fail = 0
+        self._con = None              # BLE 终端的执行环境（惰性建）
+        self._cbuf = ""               # 终端源码的分片累积缓冲
 
     # ------------------------------------------------------------------ 启动
     def start(self):
@@ -403,6 +409,38 @@ class AppLink:
         elif t == "ping":
             self.send({"t": "pong"})
 
+        elif t == "py":
+            # BLE 终端：执行手机发来的一段 Python。真机上的用途是"不插线查状态"。
+            # 语义与三条硬限制见 passport/console.py 的模块 docstring。
+            #
+            # 源码分片：单次 GATT 写最多只能带 **512 字节 JSON**（实测：
+            # payload 512 成功、522 被拒，ATT 0x0D Invalid Attribute Value
+            # Length），而 gatts_set_buffer 声明的 2048 是够不着的。
+            # 所以长源码由客户端拆成多片、带 "more": true 逐片发，最后一片
+            # 不带 more 才真正执行。
+            src = cmd.get("c") or ""
+            if cmd.get("more"):
+                if len(self._cbuf) + len(src) > _MAX_CONSOLE_SRC:
+                    self._cbuf = ""
+                    self.send({"t": "py", "ok": False, "ms": 0,
+                               "out": "源码过长（上限 %d 字节）"
+                                      % _MAX_CONSOLE_SRC})
+                    return
+                self._cbuf += src
+                self.send({"t": "py", "ok": True, "out": "", "ms": 0,
+                           "buffered": len(self._cbuf)})
+                return
+            full = self._cbuf + src
+            self._cbuf = ""
+            r = self._console().run(full)
+            r["t"] = "py"
+            self.send(r)
+
+        elif t == "pyreset":
+            self._cbuf = ""
+            self._console().reset()
+            self.send({"t": "pyreset", "ok": True})
+
         elif t == "bye":
             # 客户端要走了，**由设备端主动断开**。
             # 为什么必须这样：实测客户端调用 disconnect() 之后，
@@ -414,8 +452,20 @@ class AppLink:
         else:
             self.send({"t": "err", "m": "未知命令 %r" % (t,)})
 
+    def _console(self):
+        """惰性建 BLE 终端的执行环境。
+
+        惰性 + 只建一次：命名空间要在多次 `py` 命令之间存活（这样才像交互
+        模式），但不连终端的人不该为它付内存代价。
+        """
+        con = getattr(self, "_con", None)
+        if con is None:
+            from .console import Console
+            con = Console(self.host)
+            self._con = con
+        return con
+
     # ------------------------------------------------------------------ 上传
-    # 上传过程中允许打断的控制命令。
     #
     # ⚠ ping 必须在这里！客户端有 10 秒心跳，长上传（32KB = 205 个分片）期间
     #   一定会插进来一条 {"t":"ping"}。不在白名单里的话它会走"追加写文件"分支：

@@ -86,6 +86,8 @@ RSP 上的每条通知是一段 UTF-8 文本，按首字节区分：
 | `{"t":"state"}` | 查询运行状态 | `{"t":"state","app"\|null}` |
 | `{"t":"time","epoch","tz"}` | 校准 RTC | `{"t":"time","ok"}` |
 | `{"t":"ping"}` | 探活（也用作心跳） | `{"t":"pong"}` |
+| `{"t":"py","c"}` | **BLE 终端**：在设备上执行一段 Python，`c` 是源码 | `{"t":"py","ok","out","ms"}` |
+| `{"t":"pyreset"}` | 清空终端的命名空间 | `{"t":"pyreset","ok":true}` |
 | `{"t":"bye"}` | **客户端告辞：设备立刻主动断开并恢复广播** | `{"t":"bye","ok":true}` |
 
 > **`bye` 为什么必须有**：实测中心设备（Windows）在客户端调用 `disconnect()`
@@ -102,6 +104,69 @@ RSP 上的每条通知是一段 UTF-8 文本，按首字节区分：
 | `{"t":"key","k"}` | 按下了 up/down/ok |
 | `{"t":"state","app"}` | 运行状态变化 |
 | `{"t":"err","m"}` | 命令出错 |
+
+---
+
+## 4.1 BLE 终端（`py` / `pyreset`）
+
+连上设备后可以直接执行 Python，用来**不插 USB 查状态**
+（`gc.mem_free()`、`apps.list_apps()`、`lcd.fill(0)`、试一行新 API）。
+实现在 `os/passport/console.py`，离线用例见 `tools/test_console.py`。
+
+**语义**：
+
+- 先按**表达式**编译：`1+1` → 输出 `2`（`None` 不回显，和真 REPL 一致）
+- 编译不过再按**语句块**编译：`x = 41` 无输出，多行 `def` 也支持
+- **命名空间跨命令存活**：`x = 41` 之后下一条 `x+1` 就是 `42`
+- 预置名字：`gc` / `time` / `sys` / `apps`，以及 `shell` 和它的
+  `lcd` / `audio` / `battery` / `link` / `buttons`
+- `print` 的输出被捕获；异常以 traceback 形式返回并置 `ok=false`
+- 单次输出上限 **2048 字节**（`console.MAX_OUT`），超出截断并注明
+
+**三条硬限制**（用之前必须知道）：
+
+1. **同步执行** —— 代码在 BLE 主循环里跑完才返回。`while True:` 或
+   `time.sleep(10)` 会把界面、按键、看门狗**一起卡住**，只能断电重开。
+2. **只捕获 `print`** —— 异步/中断里产生的输出不在捕获范围内。
+3. **权限等同于系统本身** —— `machine.reset()` 会重启设备，乱改文件会破坏系统。
+
+**长源码分片**：单次 GATT 写能带的 JSON **实测硬上限是 512 字节**
+（payload 512 成功、522 被 `ATT 0x0D Invalid Attribute Value Length` 拒掉；
+`gatts_set_buffer(2048)` 声明的 2048 在真机上够不着，是 Bluedroid 长写缓冲的限制）。
+超过的源码由客户端拆片，前几片带 `"more":true` 只累积、不执行：
+
+```json
+→ {"t":"py","c":"def f():\n","more":true}
+← {"t":"py","ok":true,"out":"","ms":0,"buffered":11}
+→ {"t":"py","c":"    return 1\nprint(f())"}
+← {"t":"py","ok":true,"out":"1\n","ms":4}
+```
+
+服务端累积上限 8192 字节（`_MAX_CONSOLE_SRC`）。`pyreset` 同时清空**未完成的
+源码缓冲**和变量。
+
+**报错形态**：完整 traceback + 出错那行的源码回显。
+
+```
+Traceback (most recent call last):
+  File "passport/console.py", line 227, in run
+  File "<ble-console>", line 25, in <module>
+NameError: name 'deliberate_error_here' isn't defined
+      ^^^ deliberate_error_here
+```
+
+> 拿到这段 traceback 有两个真机独有的坑，都写进代码注释了：
+> ① MicroPython 的异常对象上**没有 `__traceback__`**（不能自己数行号）；
+> ② `sys.print_exception(exc, file)` 的 `file` **必须是原生流**（`io.StringIO`），
+> 传自定义 write/flush 对象会退化成"只有 `NameError: ...` 一行"，行号和文件名
+> 全丢 —— 输出看着是对的，信息少了一半。
+
+**客户端侧 `c` 的长度**：单片 JSON ≤ 512 字节，建议每片 ≤ 400 字节留余量。
+
+```json
+→ {"t":"py","c":"gc.mem_free()"}
+← {"t":"py","ok":true,"out":"152176\n","ms":3}
+```
 
 ---
 

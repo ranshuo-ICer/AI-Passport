@@ -340,6 +340,65 @@ def main():
     check("间隔 >= 20 ms（实测 10 ms 不够，会丢中间片）",
           bool(sleeps) and all(s >= 20 for s in sleeps), repr(sleeps[:4]))
 
+    print("\n[9] BLE 终端（py）—— 含长源码分片")
+    ble._irq(1, (1, 0, b""))
+    ble.sent.clear()
+    say(json.dumps({"t": "py", "c": "a = 6 * 7"}).encode(), link)
+    drain()
+    r = last()
+    check("py 执行语句并回 ok", r and r.get("t") == "py" and r.get("ok") is True,
+          repr(r))
+    ble.sent.clear()
+    say(json.dumps({"t": "py", "c": "print(a)"}).encode(), link)
+    drain()
+    r = last()
+    check("★ 命名空间跨命令存活", r and r.get("out") == "42\n", repr(r))
+
+    print("\n[9.1] 长源码用 more 分片累积（单次写入硬上限 512 字节）")
+    ble.sent.clear()
+    say(json.dumps({"t": "py", "c": "b = 1\n", "more": True}).encode(), link)
+    drain()
+    r = last()
+    check("more 片只累积不执行",
+          r and r.get("t") == "py" and r.get("buffered") == 6, repr(r))
+    say(json.dumps({"t": "py", "c": "c = b + 1\n", "more": True}).encode(), link)
+    drain()
+    r = last()
+    check("第二片继续累积且报告长度", r and r.get("buffered") == 16, repr(r))
+    ble.sent.clear()
+    say(json.dumps({"t": "py", "c": "print(c)"}).encode(), link)
+    drain()
+    r = last()
+    check("★ 末片把累积的源码一起执行", r and r.get("out") == "2\n", repr(r))
+
+    ble.sent.clear()
+    say(json.dumps({"t": "py", "c": "zz = 9\n", "more": True}).encode(), link)
+    drain()
+    say(json.dumps({"t": "pyreset"}).encode(), link)
+    drain()
+    say(json.dumps({"t": "py", "c": "print('ok')"}).encode(), link)
+    drain()
+    r = last()
+    check("★ pyreset 同时清掉未完成的源码缓冲和变量",
+          r and r.get("out") == "ok\n", repr(r))
+
+    ble.sent.clear()
+    say(json.dumps({"t": "py", "c": "1/0"}).encode(), link)
+    drain()
+    r = last()
+    check("终端里的异常被报成 ok=False 而不是穿出去",
+          r and r.get("ok") is False and "ZeroDivisionError" in r.get("out", ""),
+          repr(r))
+    check("★ 终端异常之后设备仍然在线", link.connected)
+
+    ble.sent.clear()
+    say(json.dumps({"t": "py", "c": "boom_undefined"}).encode(), link)
+    drain()
+    r = last()
+    check("报告里带行号", r and "line 1" in r.get("out", ""), repr(r))
+    check("报告里带出错那行源码", r and "boom_undefined" in r.get("out", ""),
+          repr(r))
+
     shutil.rmtree(tmp, ignore_errors=True)
 
     print("\n" + "=" * 56)

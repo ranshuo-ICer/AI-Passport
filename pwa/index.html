@@ -28,6 +28,7 @@
 <nav class="tabs">
   <button class="tab active" data-tab="apps">应用</button>
   <button class="tab" data-tab="editor">编辑器</button>
+  <button class="tab" data-tab="term">终端</button>
   <button class="tab" data-tab="logs">日志</button>
 </nav>
 
@@ -91,6 +92,25 @@
     </div>
     <textarea id="editor" class="code tall" spellcheck="false"></textarea>
     <div class="hint" id="editorInfo">–</div>
+  </section>
+
+  <!-- ================= 终端 ================= -->
+  <section id="tab-term" class="panel hidden">
+    <div class="warn">
+      在设备上直接执行 Python。<strong>代码会同步跑在设备的主循环里</strong> ——
+      <code>while True:</code> 或长时间 <code>sleep</code> 会把界面和按键一起卡住，
+      只能断电重开。变量在多次执行之间保留。
+    </div>
+    <div class="row">
+      <button id="btnTermRun" class="btn primary" disabled>执行（回车）</button>
+      <button id="btnTermReset" class="btn" disabled>清空变量</button>
+      <button id="btnTermClear" class="btn">清屏</button>
+    </div>
+    <pre id="termOut" class="logs term"></pre>
+    <textarea id="termIn" class="code" rows="3" spellcheck="false"
+      placeholder="输入 Python，回车执行（Shift+回车换行，上下键翻历史）"></textarea>
+    <div class="hint" id="termInfo">未连接</div>
+    <div class="row wrap" id="termSnippets"></div>
   </section>
 
   <!-- ================= 日志 ================= -->

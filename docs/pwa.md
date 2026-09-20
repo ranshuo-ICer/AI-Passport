@@ -90,9 +90,31 @@ manifest.webmanifest → PWA 清单（standalone 模式）
 
 **持久化**：`localStorage` 键 `passport_editor_v1` 保存编辑器内容。
 
+### 2.1 「终端」标签页 —— 在手机上跑 Python
+
+连上设备后，可以在手机上直接执行 Python（`gc.mem_free()`、`apps.list_apps()`、
+`lcd.fill(0x001F)`、`audio.tone(880,120)`……）。协议见
+[ble-protocol.md](ble-protocol.md) 的 4.1 节，设备端实现在
+`os/passport/console.py`。
+
+界面行为：
+
+- **回车执行**（手机上按不出 Ctrl），**Shift+回车换行**，上下键翻历史
+- 六个常用片段按钮（内存 / 小程序 / 电池 / 蜂鸣 / 闪屏 / 当前），点了填进输入框
+- 变量在设备端保留，多次执行之间共享（`x = 41` 之后 `x+1` 就是 `42`）
+- 「清空变量」= `pyreset`，同时清掉没发完的源码缓冲
+
+**长源码必须分片**：单次 GATT 写实测硬上限是 **512 字节 JSON**
+（`splitConsoleSrc()` 按 400 字节切），前几片带 `more:true` 只让设备累积，
+最后一片才真正执行。这条在 `tools/pwa_ble_sim.mjs` 的场景 F 里守着 ——
+包括"非 ASCII 也按字节量，不会超"。
+
+界面上有一条醒目的警告：**代码同步跑在设备主循环里**，`while True:` 会把
+界面和按键一起卡住，只能断电重开。这是设计限制，不是 bug。
+
 ## 3. `sw.js` Service Worker
 
-- 缓存名 `passport-pwa-v10`（**改动 pwa/ 下任何资源后必须递增这个版本号**，否则浏览器会一直用旧缓存）
+- 缓存名 `passport-pwa-v11`（**改动 pwa/ 下任何资源后必须递增这个版本号**，否则浏览器会一直用旧缓存）
 - 缓存资源：index.html / style.css / app.js / manifest / icons
 - 策略（v9 起）：
   - **代码类**（HTML / JS / CSS / webmanifest，含导航请求）→ **网络优先**
@@ -112,8 +134,8 @@ manifest.webmanifest → PWA 清单（standalone 模式）
 
 | 位置 | 内容 |
 | --- | --- |
-| `pwa/sw.js` | `const CACHE = 'passport-pwa-v10'` |
-| `pwa/app.js` | `const APP_VERSION = 'v10'` |
+| `pwa/sw.js` | `const CACHE = 'passport-pwa-v11'` |
+| `pwa/app.js` | `const APP_VERSION = 'v11'` |
 | `pwa/index.html` | `<span id="appVer">`（由 app.js 的 `init()` 填入） |
 
 界面上标题旁会显示这个版本号。**手机上报版本号**是判断"跑的是新版还是缓存旧版"

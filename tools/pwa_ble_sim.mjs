@@ -33,14 +33,22 @@ function check(name, cond, extra = '') {
 /* ----------------------------------------------------------- 假 DOM */
 function mockEl() {
   const el = {
-    value: '', textContent: '', innerHTML: '', disabled: false, checked: true,
+    value: '', textContent: '', disabled: false, checked: true,
     scrollTop: 0, scrollHeight: 0, childElementCount: 0, dataset: {}, style: {},
     files: [], href: '', download: '',
+    children: [],
     classList: { add() {}, remove() {}, contains: () => false, toggle() {} },
-    appendChild() {}, removeChild() {}, addEventListener() {},
+    appendChild(c) { this.children.push(c); },
+    removeChild() {}, addEventListener() {},
     removeEventListener() {}, click() {}, focus() {},
     querySelector: () => mockEl(), querySelectorAll: () => [],
   };
+  // innerHTML = '' 要真的清掉子节点，否则终端"清屏"测不出来
+  let html = '';
+  Object.defineProperty(el, 'innerHTML', {
+    get: () => html,
+    set: (v) => { html = v; if (v === '') el.children.length = 0; },
+  });
   return el;
 }
 
@@ -48,12 +56,15 @@ function mockEl() {
 function makeWorld(opts = {}) {
   const world = {
     writes: [],           // 设备收到的命令文本
+    lens: [],             // 每次写入的**字节数**（JSON 编码后）
     connects: 0,          // gatt.connect() 次数
     notifyHandler: null,
     linkUp: true,         // false 模拟"链路已悄悄断掉"
     failWrite: false,     // 写入时抛 NetworkError
     failConnect: false,
     autoRespond: true,
+    pyBuf: '',            // 终端源码分片累积
+    pySrc: null,          // 最终真正执行的源码
   };
 
   function deviceReply(text) {
@@ -72,6 +83,18 @@ function makeWorld(opts = {}) {
       { n: 'beats', title: 'Beats', s: 15253 },
     ] });
     else if (m.t === 'ping') send({ t: 'pong' });
+    else if (m.t === 'py') {
+      if (m.more) {
+        world.pyBuf += m.c;
+        send({ t: 'py', ok: true, out: '', ms: 0, buffered: world.pyBuf.length });
+      } else {
+        const src = world.pyBuf + m.c;
+        world.pyBuf = '';
+        world.pySrc = src;
+        send({ t: 'py', ok: true, out: 'device got ' + src.length + ' chars\n', ms: 3 });
+      }
+    }
+    else if (m.t === 'pyreset') { world.pyBuf = ''; send({ t: 'pyreset', ok: true }); }
     else if (m.t === 'stop') send({ t: 'stop', ok: true });
   }
 
@@ -86,6 +109,7 @@ function makeWorld(opts = {}) {
         throw e;
       }
       world.writes.push(text);
+      world.lens.push(new TextEncoder().encode(text).length);
       if (world.autoRespond) queueMicrotask(() => deviceReply(text));
     },
   };
@@ -124,6 +148,7 @@ function makeWorld(opts = {}) {
 
 /* ------------------------------------------------------ 加载 app.js */
 function loadApp(world) {
+  const els = {};
   const sandbox = {
     console,
     setTimeout, clearTimeout, setInterval, clearInterval,
@@ -135,9 +160,10 @@ function loadApp(world) {
     addEventListener() {}, removeEventListener() {},
     matchMedia: () => ({ matches: false, addEventListener() {} }),
     location: { href: 'http://localhost/', reload() {} },
+    __els: els,          // 元素按 id 缓存：真 DOM 也是同一个对象
     document: {
       hidden: false,
-      getElementById: () => mockEl(),
+      getElementById: (id) => (els[id] || (els[id] = mockEl())),
       createElement: () => mockEl(),
       querySelectorAll: () => [],
       addEventListener() {},
@@ -156,7 +182,9 @@ function loadApp(world) {
   const src = readFileSync(SRC, 'utf8') + `
 ;globalThis.__t = {
   connect, refreshApps, pushApp, sendCmd, autoReconnect, isLinkError,
-  adviseConnectFailure,
+  adviseConnectFailure, splitConsoleSrc, termSend, termReset,
+  termText: () => (__els['termOut'].children || []).map(c => c.textContent).join(''),
+  termClear: () => { __els['termOut'].innerHTML = ''; },
   get connected(){ return connected; },
   get reconnecting(){ return reconnecting; },
   get pushing(){ return pushing; },
@@ -280,6 +308,51 @@ async function main() {
           /链路是通的/.test(t4) && /断电重开/.test(t4));
     check('四种情况的建议互不相同',
           new Set([t1, t2, t3, t4]).size === 4);
+  }
+
+  // ------------------------------------------- F 终端：分片发送长源码
+  console.log('\n[F] 终端：一次 GATT 写硬上限 512 字节，长源码必须分片');
+  {
+    const w = makeWorld();
+    const app = loadApp(w);
+    await app.connect(true);
+
+    // 1) 切片器本身：每片 JSON 都不能超过 512（实测硬上限），且可无损还原
+    const src = 'x = 1\n' + 'print("中文也要能切", x)\n'.repeat(40) + 'y = 2\n';
+    const parts = app.splitConsoleSrc(src);
+    const enc = new TextEncoder();
+    const maxJson = Math.max(...parts.map(p =>
+      enc.encode(JSON.stringify({ t: 'py', c: p, more: true })).length));
+    check('切片器：片数 > 1', parts.length > 1, `${parts.length} 片`);
+    check('切片器：每片 JSON <= 512 字节（真机硬上限）',
+          maxJson <= 512, `最大 ${maxJson} 字节`);
+    check('切片器：拼接后与原文完全一致', parts.join('') === src);
+    check('切片器：非 ASCII 也按字节量（不会超）', maxJson <= 400,
+          `最大 ${maxJson} 字节`);
+
+    // 2) 真的发一遍：设备必须收到完整源码
+    w.lens.length = 0;
+    w.pySrc = null;
+    await app.termSend(src);
+    check('★ 设备最终拿到的源码与原文一致',
+          w.pySrc === src, `设备收到 ${w.pySrc ? w.pySrc.length : 0} 字 / 原文 ${src.length} 字`);
+    check('★ 除最后一片外都带 more:true', (() => {
+      const pys = w.writes.filter(t => t.startsWith('{"t":"py"'));
+      if (pys.length < 2) return false;
+      return pys.slice(0, -1).every(t => t.includes('"more":true')) &&
+             !pys[pys.length - 1].includes('"more"');
+    })());
+    check('★ 每一次写入都在 512 字节以内',
+          Math.max(...w.lens) <= 512, `最大 ${Math.max(...w.lens)} 字节`);
+    check('终端里显示了设备的输出',
+          w.pySrc && app.termText().includes('device got ' + src.length),
+          app.termText().slice(-120));
+
+    // 3) 清屏 / 清变量
+    app.termClear();
+    check('清屏后终端输出为空', app.termText() === '', app.termText().slice(0, 40));
+    await app.termReset();
+    check('清空变量会清掉没发完的源码缓冲', w.pyBuf === '');
   }
 
   console.log('\n' + '='.repeat(66));

@@ -91,6 +91,19 @@ textarea.tall{height:56vh}
 .logs .t-err{color:var(--danger)}
 .logs .t-sys{color:var(--dim)}
 
+/* 终端：输出区要能独立滚动，输入框固定在下面 */
+.logs.term{height:46vh;min-height:180px}
+.logs .t-cmd{color:var(--accent);font-weight:700}
+.logs .t-ok{color:#7ee787}
+.warn{background:#2a1f10;border:1px solid #6b4a12;border-radius:10px;
+  padding:9px 11px;font-size:12.5px;line-height:1.55;color:#f0c674;margin:0 0 10px}
+.warn code{background:#3a2a12;padding:1px 5px;border-radius:5px;color:#ffd479}
+#termIn{margin-top:8px;min-height:64px}
+#termSnippets .snippet{font-size:12px;padding:6px 9px;border-radius:8px;
+  background:#141b30;border:1px solid var(--line);color:var(--fg);
+  cursor:pointer;white-space:nowrap}
+#termSnippets .snippet:active{background:#1d2745}
+
 .toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);
   background:#232c4a;border:1px solid var(--line);color:var(--fg);
   padding:11px 18px;border-radius:99px;font-size:14px;z-index:99;
