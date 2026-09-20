@@ -92,9 +92,52 @@ manifest.webmanifest → PWA 清单（standalone 模式）
 
 ## 3. `sw.js` Service Worker
 
-- 缓存名 `passport-pwa-v8`（**改动 pwa/ 下任何资源后必须递增这个版本号**，否则浏览器会一直用旧缓存）
+- 缓存名 `passport-pwa-v9`（**改动 pwa/ 下任何资源后必须递增这个版本号**，否则浏览器会一直用旧缓存）
 - 缓存资源：index.html / style.css / app.js / manifest / icons
-- 策略：缓存优先，后台更新；断网时返回缓存
+- 策略（v9 起）：
+  - **代码类**（HTML / JS / CSS / webmanifest，含导航请求）→ **网络优先**
+  - **图片类**（png/jpg/svg/ico/webp）→ 缓存优先，后台静默刷新
+  - 网络优先的请求带 `cache: 'no-cache'`，强制跟服务器校验 ETag（通常只回 304），
+    3 秒拿不到就回退缓存 —— 断网时仍然能打开（蓝牙不需要网络）
+
+### 为什么从"全站缓存优先"改成"代码网络优先"
+
+以前整站都是"缓存优先 + 后台更新"，后果是：**每次部署后，用户第一次打开
+拿到的必然是旧版**，要关掉再开一次才会更新。加上 GitHub Pages 给所有文件发
+`Cache-Control: max-age=600`，这条路径能连续骗过两次加载。表现出来就是
+"代码明明改了，手机上还是老行为" —— 很容易误判成逻辑有 bug，然后去改本来就
+正确的代码。改完之后，部署后的第一次打开就是新版。
+
+### 版本号必须三处一致
+
+| 位置 | 内容 |
+| --- | --- |
+| `pwa/sw.js` | `const CACHE = 'passport-pwa-v9'` |
+| `pwa/app.js` | `const APP_VERSION = 'v9'` |
+| `pwa/index.html` | `<span id="appVer">`（由 app.js 的 `init()` 填入） |
+
+界面上标题旁会显示这个版本号。**手机上报版本号**是判断"跑的是新版还是缓存旧版"
+的唯一可靠依据 —— 这三处不一致时 `tools/check_pwa.py` 会失败，所以别手工改一处。
+
+### 本地怎么验（不需要手机）
+
+`tools/pwa_ble_sim.mjs` 用 Node 的 `vm` 把 `pwa/app.js` 真加载起来，配一套假的
+`navigator.bluetooth` / GATT 设备，驱动三条关键路径：
+
+```bash
+node tools/pwa_ble_sim.mjs
+```
+
+| 场景 | 断言 |
+| --- | --- |
+| A 正常连接 + 刷新列表 | hello / ls 真的写出去了，刷新后仍连接 |
+| B 刷新时链路**已悄悄断掉** | 触发自动重连，重连后恢复已连接（而不是弹"请重新连接"） |
+| C 上传过程中链路断掉 | **绝不重连**（重连要发的 hello 会被设备当 app.py 源码写进去，就是 #1 那类损坏） |
+
+这个测试是必要的：手机上的 Web Bluetooth 没法自动化，而这段重连逻辑如果只做
+语法检查，等于没测过。它当初一跑就抓到一个真实缺陷 —— `refreshApps()` 先建等待器
+再 `sendCmd`，写失败抛异常时等待器永远等不到 `await`，成了"未处理的 Promise 拒绝"
+（浏览器控制台满屏 `Uncaught (in promise)`）。修法见 `awaitMsg()` 里那个空 `catch`。
 
 ---
 

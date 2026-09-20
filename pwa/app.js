@@ -16,6 +16,11 @@ const UUID_RSP     = '7a5c0003-0000-4000-8000-70617373706f';
 const MAX_APP_BYTES = 32 * 1024;
 const NAME_RE = /^[a-z0-9_-]{1,16}$/;
 
+/* 版本号：必须和 sw.js 里的 CACHE 版本、以及 index.html 的显示保持一致。
+ * 手机上界面标题旁边显示的就是它 —— 出问题时报这个号，就能立刻判断
+ * "跑的是新版还是浏览器缓存里的旧版"，省掉一整轮瞎猜。 */
+const APP_VERSION = 'v9';
+
 let device = null, server = null, cmdChar = null, rspChar = null;
 let connected = false;
 let waiter = null;             // 当前等待中的响应
@@ -90,7 +95,7 @@ function onMsg(m) {
 function awaitMsg(types, timeout = 10000) {
   const i = inbox.findIndex(m => types.includes(m.t));
   if (i >= 0) return Promise.resolve(inbox.splice(i, 1)[0]);
-  return new Promise((resolve, reject) => {
+  const p = new Promise((resolve, reject) => {
     if (waiter) { clearTimeout(waiter.timer); waiter.reject(new Error('请求被新命令覆盖')); }
     const timer = setTimeout(() => {
       if (waiter && waiter.timer === timer) waiter = null;
@@ -98,6 +103,12 @@ function awaitMsg(types, timeout = 10000) {
     }, timeout);
     waiter = { types, resolve, reject, timer };
   });
+  /* 这个 promise 不一定会被 await。典型例子：refreshApps() 先建等待器再 sendCmd，
+   * 而 sendCmd 在写失败时抛异常 → 下面的 await p 根本执行不到，p 就成了"未处理的
+   * 拒绝"（浏览器控制台满屏 Uncaught (in promise)）。挂一个空 catch 只是把
+   * "无人认领"这件事标记掉，真正 await 它的调用方照样拿到 reject。 */
+  p.catch(() => {});
+  return p;
 }
 
 function onNotify(event) {
@@ -189,7 +200,9 @@ async function sendCmd(obj) {
   } catch (e) {
     if (isLinkError(e) && !pushing) {
       handleLinkLost('写入失败');
-      throw new Error('连接已断开（正在自动重连，稍后再试）');
+      const le = new Error('连接已断开（正在自动重连，稍后再试）');
+      le.linkLost = true;   // 调用方据此静默交棒给自动重连，别再弹错误
+      throw le;
     }
     throw e;
   }
@@ -340,7 +353,9 @@ function teardownConnection(label, quiet) {
     clearTimeout(waiter.timer);
     const w = waiter;
     waiter = null;
-    try { w.reject(new Error(label || '连接已结束')); } catch (_) {}
+    // 注意：reject() 是异步生效的，包 try/catch 没用 —— 防止"无人 await"的
+    // 未处理拒绝，靠的是 awaitMsg 里挂的那个空 catch。
+    w.reject(new Error(label || '连接已结束'));
   }
   setUi(false);
   $('devName').textContent = label || '已断开';
@@ -388,7 +403,14 @@ function fmtBytes(n) {
 async function refreshApps() {
   if (!connected) return;
   const p = awaitMsg(['ls', 'err']);
-  await sendCmd({ t: 'ls' });
+  try {
+    await sendCmd({ t: 'ls' });
+  } catch (e) {
+    // 链路断了：handleLinkLost 已经接手，自动重连成功后 openGatt() 会自己
+    // 再拉一次列表（并重画界面），所以这里安静退出，不要弹错。
+    if (e && e.linkLost) return;
+    throw e;
+  }
   const r = await p;
   if (r.t !== 'ls') return;
   const list = $('appList');
@@ -1119,11 +1141,16 @@ function updateCodeLen() {
   updateCodeLen();
   setUi(false);
 
+  // 标题旁显示版本号 —— 这是判断"手机跑的是新版还是旧缓存"的唯一可靠依据
+  const verEl = $('appVer');
+  if (verEl) verEl.textContent = APP_VERSION;
+  document.title = 'Passport 助手 ' + APP_VERSION;
+
   if (!navigator.bluetooth) {
     log('⚠ 这个浏览器没有 Web Bluetooth。请用 Chrome / Edge（http://localhost 或 https）。', 'err');
     toast('浏览器不支持 Web Bluetooth', 5000);
   } else {
-    log('就绪。点右上角「连接」选择 PassportOS 设备。');
+    log('就绪（助手 ' + APP_VERSION + '）。点右上角「连接」选择 PassportOS 设备。');
   }
 
   if ('serviceWorker' in navigator) {

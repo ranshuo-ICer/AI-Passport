@@ -67,6 +67,21 @@ def main():
     check("sw.js 缓存版本是 passport-pwa-vN 形式", bool(m),
           "未匹配到 CACHE 常量")
 
+    # 版本号必须三处一致：sw.js 的 CACHE / app.js 的 APP_VERSION / index.html 的显示位
+    # 不一致的后果很阴险：界面上显示 v9 而缓存还是 v8，于是"看起来是新版、
+    # 行为还是旧版"，白白怀疑逻辑写错了。
+    av = re.search(r"APP_VERSION\s*=\s*'([^']+)'", js)
+    check("app.js 定义了 APP_VERSION", bool(av))
+    if m and av:
+        want = "v" + m.group(1)
+        check("APP_VERSION(%s) 与 sw.js 缓存版本(%s) 一致" % (av.group(1), want),
+              av.group(1) == want,
+              "两处版本号必须同步升，否则界面显示的版本号会骗人")
+    check("index.html 有版本号显示位 appVer", 'id="appVer"' in html)
+    check("app.js 会把 APP_VERSION 写进界面",
+          re.search(r"appVer'\)[\s\S]{0,80}APP_VERSION", js) is not None,
+          "init() 里应设置 $('appVer').textContent = APP_VERSION")
+
     print("\n%s（%d 项失败）" % ("全部通过" if not fails else "存在问题",
                                  len(fails)))
     if fails:
